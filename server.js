@@ -211,7 +211,7 @@ async function googleTrends(q, geo) {
     const hay = (t.term + " " + t.news.map((n) => n.title).join(" ")).toLowerCase();
     return terms.some((w) => hay.includes(w));
   });
-  return { matches, top: all.slice(0, 12) };
+  return { matches, top: all };
 }
 
 // Wikipedia: find articles about the topic and flag the ones with a recent spike in views

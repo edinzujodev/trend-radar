@@ -162,11 +162,12 @@ function render() {
   const maxP = Math.max(1, ...phrases.map((t) => t.score));
 
   const gt = d.googleTrends;
-  const gtHtml = gt.matches.length
-    ? gt.matches.map((m) => `<div class="gt"><b>${esc(m.term)}</b> <span class="m">${esc(m.traffic)} searches</span>
-        ${m.news[0] ? `<div class="m"><a href="${esc(m.news[0].url)}" target="_blank">${esc(m.news[0].title)}</a></div>` : ""}</div>`).join("")
-    : `<p class="empty">Nothing about “${esc(d.query)}” in today's top searches. Overall top searches right now:</p>
-       <div class="cloud">${gt.top.map((t) => `<span class="chip" title="${esc(t.traffic)}">${esc(t.term)}</span>`).join("")}</div>`;
+  const matched = new Set(gt.matches.map((m) => m.term));
+  const gtRow = (m) => `<div class="gt"><a href="https://www.google.com/search?q=${encodeURIComponent(m.term)}" target="_blank"><b>${esc(m.term)}</b></a>
+      ${matched.has(m.term) ? `<span class="badge" style="background:var(--accent)">match</span>` : ""}<span class="m">${esc(m.traffic)} searches</span>
+      ${m.news[0] ? `<div class="m"><a href="${esc(m.news[0].url)}" target="_blank">${esc(m.news[0].title)}</a> · ${esc(m.news[0].source)}</div>` : ""}</div>`;
+  const gtHtml = (gt.matches.length ? "" : `<p class="empty">Nothing about “${esc(d.query)}” in today's top searches. All top searches right now:</p>`)
+    + [...gt.matches, ...gt.top.filter((t) => !matched.has(t.term))].map(gtRow).join("");
 
   const wikiHtml = d.wikipedia.length
     ? d.wikipedia.slice(0, 8).map((w) => {
@@ -194,7 +195,7 @@ function render() {
       <div>
         <div class="panel">
           <h2>Google Trends today (${esc(d.geo)})</h2>
-          <p class="sub">Top searches mentioning your topic.</p>
+          <p class="sub">Today's top Google searches. Ones mentioning your topic come first.</p>
           ${gtHtml}
         </div>
         <div class="panel">
