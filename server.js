@@ -6,6 +6,14 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 
+// Load KEY=value lines from .env (if present) without overriding real env vars
+try {
+  for (const line of fs.readFileSync(path.join(__dirname, ".env"), "utf8").split(/\r?\n/)) {
+    const m = line.match(/^\s*([\w.-]+)\s*=\s*(.*?)\s*$/);
+    if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].replace(/^(["'])(.*)\1$/, "$2");
+  }
+} catch {}
+
 const PORT = process.env.PORT || 3000;
 const CACHE_MS = 10 * 60 * 1000;
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36";

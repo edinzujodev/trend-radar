@@ -10,7 +10,7 @@ Needs Node.js 18+ and no `npm install`.
 node server.js
 ```
 
-Then open http://localhost:3000 (set `PORT=xxxx` to change the port).
+Then open http://localhost:3000 (to change the port, copy `.env.example` to `.env` and edit `PORT`).
 
 ## Sources (all free, no API keys)
 
