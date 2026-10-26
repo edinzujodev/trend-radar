@@ -352,6 +352,30 @@ function trendingTerms(items, query) {
   return { phrases, words };
 }
 
+// ---------- per-post trending score ----------
+
+// Only compared within one source. Sites with engagement counts use velocity
+// (HN-style gravity, so a fresh post gaining fast beats an old one with more total).
+// Reddit's feed is already "top today" so its order is kept; Google News has no
+// signal at all, so stories score by how many of the trending terms they carry.
+function withTrend(items, terms) {
+  const termWeight = new Map();
+  for (const t of [...terms.phrases, ...terms.words])
+    for (const id of t.items) termWeight.set(id, (termWeight.get(id) || 0) + t.score);
+
+  const now = Date.now();
+  return items.map((it, pos) => {
+    let trend;
+    if (it.source === "Reddit") trend = -pos;
+    else if (it.source === "Google News") trend = termWeight.get(it.id) || 0;
+    else {
+      const hours = Math.max(0, (now - new Date(it.time)) / 36e5);
+      trend = (it.score || 0) / Math.pow(hours + 2, 1.5);
+    }
+    return { ...it, trend: +trend.toFixed(4) };
+  });
+}
+
 // ---------- API ----------
 
 async function trends(q, geo) {
@@ -373,13 +397,16 @@ async function trends(q, geo) {
   });
   items = cleanItems(items.filter((it) => it.title)).map((it, id) => ({ ...it, id }));
 
+  const terms = trendingTerms(items, q);
+  items = withTrend(items, terms);
+
   const [gt, wiki] = await Promise.allSettled([googleTrends(q, geo), wikipediaSpikes(q)]);
   const data = {
     query: q,
     geo,
     fetchedAt: new Date().toISOString(),
     status,
-    terms: trendingTerms(items, q),
+    terms,
     googleTrends: gt.status === "fulfilled" ? gt.value : { matches: [], top: [], error: String(gt.reason) },
     wikipedia: wiki.status === "fulfilled" ? wiki.value : [],
     items,

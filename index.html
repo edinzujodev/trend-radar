@@ -61,6 +61,8 @@
   .item .t { font-weight: 550; overflow-wrap: anywhere; }
   .item .m { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
   .badge { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 6px; color: #fff; margin-right: 6px; }
+  h3.src { margin: 18px 0 2px; font-size: 13px; display: flex; align-items: center; gap: 4px; }
+  h3.src .m { font-weight: 400; color: var(--muted); }
   .gt { padding: 8px 0; border-top: 1px solid var(--line); }
   .gt:first-of-type { border-top: 0; }
   .gt .m { font-size: 12.5px; color: var(--muted); }
@@ -101,6 +103,7 @@ const SOURCES = {
 };
 const KEY_NAMES = { news: "Google News", reddit: "Reddit", hackernews: "Hacker News", github: "GitHub",
   bluesky: "Bluesky", mastodon: "Mastodon", devto: "DEV" };
+const PER_SOURCE = 20;
 const PRESETS = ["software", "AI", "gaming", "cybersecurity", "crypto", "music", "movies", "football", "science", "startups"];
 
 const $ = (s) => document.querySelector(s);
@@ -230,32 +233,27 @@ function renderItems() {
   items.forEach((i) => counts[i.source] = (counts[i.source] || 0) + 1);
   if (activeSource !== "All") items = items.filter((i) => i.source === activeSource);
 
-  // Blend rank-within-site with overall engagement, so each site's best posts surface
-  // but a post with 3 reposts doesn't outrank one with 900 likes
-  const max = {};
-  d.items.forEach((i) => max[i.source] = Math.max(max[i.source] || 0, i.score || 0));
-  const top = Math.log1p(Math.max(1, ...Object.values(max)));
-  const rank = (i) => {
-    if (!max[i.source]) return 0.45; // news/reddit have no counts
-    const within = Math.log1p(i.score) / Math.log1p(max[i.source]);
-    return within * Math.sqrt(Math.log1p(max[i.source]) / top);
-  };
-  items = [...items].sort((a, b) => rank(b) - rank(a) || new Date(b.time) - new Date(a.time)).slice(0, 80);
+  // Each site gets its own top 20 by trending score (scores only compare within a site)
+  const groups = Object.keys(SOURCES)
+    .map((s) => ({ s, list: items.filter((i) => i.source === s).sort((a, b) => b.trend - a.trend).slice(0, PER_SOURCE) }))
+    .filter((g) => g.list.length);
 
   const mark = (s) => hl ? esc(s).replace(hl, "<mark>$1</mark>") : esc(s);
   const filters = ["All", ...Object.keys(SOURCES)].filter((s) => counts[s])
     .map((s) => `<span class="chip ${activeSource === s ? "on" : ""}" data-src="${s}">${s} ${counts[s]}</span>`).join("");
+  const row = (i) => `<div class="item">
+      <div class="t"><a href="${esc(i.url)}" target="_blank" rel="noopener">${mark(i.title)}</a></div>
+      <div class="m">${esc(i.meta || "")}${i.meta ? " · " : ""}${ago(i.time)}</div>
+    </div>`;
 
   $("#items").innerHTML = `
-    <h2>Top posts</h2>
-    <p class="sub">Most-engaged posts from the last day or two.</p>
+    <h2>Trending posts</h2>
+    <p class="sub">Top ${PER_SOURCE} per site, sorted by how fast they're gaining engagement.</p>
     ${activeTerm ? `<div class="active-term">Showing posts that mention <b>${esc(activeTerm)}</b> · <a href="#" id="clear">clear</a></div>` : ""}
     <div class="filters">${filters}</div>
-    ${items.map((i) => `<div class="item">
-      <div class="t"><span class="badge" style="background:${SOURCES[i.source]}">${i.source}</span>
-        <a href="${esc(i.url)}" target="_blank" rel="noopener">${mark(i.title)}</a></div>
-      <div class="m">${esc(i.meta || "")}${i.meta ? " · " : ""}${ago(i.time)}</div>
-    </div>`).join("") || `<p class="empty">No posts.</p>`}`;
+    ${groups.map((g) => `<h3 class="src"><span class="badge" style="background:${SOURCES[g.s]}">${g.s}</span>
+        <span class="m">top ${g.list.length} of ${counts[g.s]}</span></h3>${g.list.map(row).join("")}`).join("")
+      || `<p class="empty">No posts.</p>`}`;
 
   $("#items .filters").onclick = (e) => {
     if (!e.target.dataset.src) return;
