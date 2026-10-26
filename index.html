@@ -150,6 +150,7 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) docu
 function ago(t) {
   const m = Math.round((Date.now() - new Date(t)) / 60000);
   if (!isFinite(m)) return "";
+  if (m < 1) return "just now";
   if (m < 60) return `${m}m ago`;
   if (m < 48 * 60) return `${Math.round(m / 60)}h ago`;
   return `${Math.round(m / 1440)}d ago`;
@@ -299,7 +300,7 @@ function render() {
     + [...gt.matches, ...gt.top.filter((t) => !matched.has(t.term))].map(gtRow).join("");
 
   const ch = d.changes || { comparedAt: null, dropped: {} };
-  const since = ch.comparedAt ? ` ▲▼ show movement since ${ago(ch.comparedAt)}.` : "";
+  const since = ch.comparedAt ? ` ▲▼ compare with the check ${ago(ch.comparedAt).replace("just now", "moments ago")}.` : "";
   const dropped = (kind) => (ch.dropped[kind] || []).length
     ? `<p class="dropped">No longer trending: ${ch.dropped[kind].map(esc).join(", ")}</p>` : "";
   const legend = Object.entries(SOURCES).map(([s, c]) => `<span><span class="dot" style="background:${c}"></span>${s}</span>`).join("");
