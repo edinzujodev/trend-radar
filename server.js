@@ -41,12 +41,27 @@ function decode(s = "") {
   return s
     .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
     .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')
-    .replace(/&apos;|&#39;/g, "'").replace(/&#(\d+);/g, (_, n) => String.fromCharCode(n))
+    .replace(/&apos;|&#39;/g, "'").replace(/&nbsp;/g, " ").replace(/&hellip;/g, "…")
+    .replace(/&[lr]squo;/g, "'").replace(/&[lr]dquo;/g, '"').replace(/&mdash;/g, "—").replace(/&ndash;/g, "–")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(n)).replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
     .replace(/&amp;/g, "&");
 }
 
+// Decodes twice after stripping tags: some Mastodon servers double-escape entities
 function stripHtml(s = "") {
-  return decode(s).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  // Inline tags vanish without a space so Mastodon's <a>#<span>tag</span></a> stays "#tag"
+  return decode(decode(s).replace(/<\/?(a|span)\b[^>]*>/g, "").replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+}
+
+// Hashtag-only sites: "machine learning" is searched as #machinelearning, plus each word's
+// tag for phrases nobody hashtags; posts found via a single word must contain every word
+const tagOf = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+function topicWords(q) {
+  return q.toLowerCase().split(/\s+/).map(tagOf).filter(Boolean);
+}
+function mentionsAll(text, words) {
+  const t = text.toLowerCase();
+  return words.every((w) => t.includes(w));
 }
 
 function tag(xml, name) {
@@ -143,10 +158,12 @@ const sources = {
   async bluesky(q) {
     const since = daysAgo(2).toISOString();
     const data = await get(
-      `https://api.bsky.app/xrpc/app.bsky.feed.searchPosts?q=${encodeURIComponent(q)}&sort=top&limit=60&since=${since}`
+      // English only: every country in the picker is English-speaking, and short topics like
+      // "AI" otherwise match common words in other languages (Portuguese "aí")
+      `https://api.bsky.app/xrpc/app.bsky.feed.searchPosts?q=${encodeURIComponent(q)}&sort=top&limit=60&since=${since}&lang=en`
     );
     return data.posts.map((p) => {
-      const text = (p.record && p.record.text) || "";
+      const text = decode((p.record && p.record.text) || ""); // some cross-posting bots leave HTML entities in
       return {
         source: "Bluesky",
         title: text.length > 160 ? text.slice(0, 157) + "…" : text,
@@ -161,10 +178,12 @@ const sources = {
   },
 
   async mastodon(q) {
-    const hashtag = q.toLowerCase().replace(/[^a-z0-9]/g, "");
-    const data = await get(`https://mastodon.social/api/v1/timelines/tag/${hashtag}?limit=40`);
-    return data.map((s) => {
+    const words = topicWords(q), hashtag = words.join("");
+    const any = words.length > 1 ? words.map((w) => `&any[]=${w}`).join("") : "";
+    const data = await get(`https://mastodon.social/api/v1/timelines/tag/${hashtag}?limit=40${any}`);
+    return data.filter((s) => !s.language || s.language.startsWith("en")).flatMap((s) => {
       const text = stripHtml(s.content);
+      if (words.length > 1 && !s.tags.some((t) => t.name.toLowerCase() === hashtag) && !mentionsAll(text, words)) return [];
       return {
         source: "Mastodon",
         title: text.length > 160 ? text.slice(0, 157) + "…" : text,
@@ -179,8 +198,14 @@ const sources = {
   },
 
   async devto(q) {
-    const t = q.toLowerCase().replace(/[^a-z0-9]/g, "");
-    const data = await get(`https://dev.to/api/articles?tag=${t}&top=3&per_page=30`);
+    const words = topicWords(q), joined = words.join("");
+    const tags = words.length > 1 ? [joined, ...words] : [joined];
+    const lists = await Promise.all(tags.map((t, i) =>
+      get(`https://dev.to/api/articles?tag=${t}&top=3&per_page=30`).catch((e) => { if (i === 0) throw e; return []; })));
+    const seen = new Set();
+    const data = lists.flatMap((list, i) => list.filter((a) =>
+      !seen.has(a.id) && seen.add(a.id) &&
+      (i === 0 || mentionsAll(`${a.title} ${a.description} ${(a.tag_list || []).join(" ")}`, words))));
     return data.map((a) => ({
       source: "DEV",
       title: a.title,
@@ -376,6 +401,43 @@ function withTrend(items, terms) {
   });
 }
 
+// ---------- history (rising / falling) ----------
+
+// Each fresh fetch saves the ranked term lists, so the next one can say what moved.
+// Comparing with a snapshot at least an hour old keeps 10-minute refreshes from showing only noise.
+const HISTORY_FILE = path.join(__dirname, "data", "history.json");
+const HISTORY_KEEP = 72;
+const COMPARE_AFTER_MS = 60 * 60 * 1000;
+let historyDb = {};
+try { historyDb = JSON.parse(fs.readFileSync(HISTORY_FILE, "utf8")); } catch {}
+
+function withHistory(key, terms) {
+  const snaps = historyDb[key] || [];
+  const now = Date.now();
+  const prev = [...snaps].reverse().find((s) => now - s.at >= COMPARE_AFTER_MS) || snaps[snaps.length - 1];
+
+  const out = { comparedAt: prev ? new Date(prev.at).toISOString() : null, dropped: {} };
+  for (const kind of ["phrases", "words"]) {
+    const before = prev ? prev[kind] : null;
+    terms[kind].forEach((t, i) => {
+      t.rank = i + 1;
+      if (before) t.prevRank = before.indexOf(t.term) + 1 || null; // null = new since then
+    });
+    const nowSet = new Set(terms[kind].map((t) => t.term));
+    out.dropped[kind] = before ? before.filter((t) => !nowSet.has(t)).slice(0, 10) : [];
+  }
+
+  snaps.push({ at: now, phrases: terms.phrases.map((t) => t.term), words: terms.words.map((t) => t.term) });
+  historyDb[key] = snaps.slice(-HISTORY_KEEP);
+  try {
+    fs.mkdirSync(path.dirname(HISTORY_FILE), { recursive: true });
+    fs.writeFileSync(HISTORY_FILE, JSON.stringify(historyDb));
+  } catch (e) {
+    console.warn("Could not save history:", e.message);
+  }
+  return out;
+}
+
 // ---------- API ----------
 
 async function trends(q, geo) {
@@ -399,6 +461,7 @@ async function trends(q, geo) {
 
   const terms = trendingTerms(items, q);
   items = withTrend(items, terms);
+  const changes = withHistory(key, terms);
 
   const [gt, wiki] = await Promise.allSettled([googleTrends(q, geo), wikipediaSpikes(q)]);
   const data = {
@@ -407,6 +470,7 @@ async function trends(q, geo) {
     fetchedAt: new Date().toISOString(),
     status,
     terms,
+    changes,
     googleTrends: gt.status === "fulfilled" ? gt.value : { matches: [], top: [], error: String(gt.reason) },
     wikipedia: wiki.status === "fulfilled" ? wiki.value : [],
     items,

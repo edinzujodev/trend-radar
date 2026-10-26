@@ -9,13 +9,14 @@
     --bg: #f6f7f9; --panel: #ffffff; --ink: #16181d; --muted: #646b78; --line: #e3e6eb;
     --accent: #3b5bdb; --accent-soft: #e8edff; --hot: #d9480f; --good: #2b8a3e;
     --s-news: #3b5bdb; --s-reddit: #e8590c; --s-hn: #f08c00; --s-github: #495057;
-    --s-bluesky: #1c7ed6; --s-mastodon: #7048e8; --s-dev: #0ca678;
+    --s-bluesky: #1098ad; --s-mastodon: #7048e8; --s-dev: #0ca678;
+    --cmp-a: var(--accent); --cmp-b: #c2255c;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #0f1115; --panel: #171a21; --ink: #e8eaef; --muted: #9aa1ad; --line: #2a2f3a;
       --accent: #748ffc; --accent-soft: #1e2440; --hot: #ff8a4c; --good: #51cf66;
-      --s-github: #adb5bd;
+      --s-github: #adb5bd; --s-bluesky: #15aabf; --cmp-b: #f06595;
     }
   }
   * { box-sizing: border-box; }
@@ -47,6 +48,13 @@
   .term:hover, .term.on { background: var(--accent-soft); }
   .term .name { font-weight: 600; overflow-wrap: anywhere; }
   .term .n { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .mv { font-size: 11px; font-weight: 700; margin-left: 6px; }
+  .mv.new { color: var(--accent); text-transform: uppercase; letter-spacing: .04em; }
+  .mv.up { color: var(--good); }
+  .mv.down { color: var(--hot); }
+  .dropped { margin: 10px 8px 0; font-size: 12.5px; color: var(--muted); }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0 0 10px; font-size: 12px; color: var(--muted); }
+  .term.alert { box-shadow: inset 3px 0 0 var(--hot); }
   .bar { grid-column: 1 / -1; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; display: flex; }
   .bar i { display: block; height: 100%; }
   .cloud { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -72,6 +80,19 @@
   svg.spark { width: 70px; height: 22px; }
   .empty { color: var(--muted); font-size: 13.5px; }
   .loading { padding: 40px 0; text-align: center; color: var(--muted); }
+  .auto { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; }
+  .auto input { flex: none; margin: 0; }
+  .banner { background: var(--panel); border: 1px solid var(--hot); border-left-width: 4px; border-radius: 10px;
+    padding: 10px 14px; margin: 18px 0 0; font-size: 14px; }
+  .banner b { color: var(--hot); }
+  .cmp-row { display: grid; grid-template-columns: 110px 1fr; gap: 4px 12px; align-items: center; padding: 6px 0; font-size: 13px; }
+  .cmp-row .bar { grid-column: 2; height: 8px; border-radius: 4px; }
+  .cmp-row .n { grid-column: 2; display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; }
+  .cmp-head { display: flex; justify-content: space-between; font-weight: 700; margin-bottom: 6px; }
+  .cmp-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 860px) { .cmp-grid { grid-template-columns: 1fr; } }
+  .cmp-a { color: var(--cmp-a); } .cmp-b { color: var(--cmp-b); }
+  .big { font-size: 17px; margin: 4px 0 14px; }
   mark { background: #ffe066; color: #000; border-radius: 3px; padding: 0 2px; }
 </style>
 </head>
@@ -83,13 +104,14 @@
   </header>
 
   <form id="f">
-    <input id="q" placeholder="e.g. software, AI, gaming, crypto, football…" autocomplete="off">
+    <input id="q" placeholder="e.g. software, AI, gaming… or compare: AI vs crypto" autocomplete="off">
     <select id="geo" title="Country for Google News and Google Trends">
       <option value="US">United States</option><option value="GB">United Kingdom</option>
       <option value="CA">Canada</option><option value="AU">Australia</option><option value="IN">India</option>
       <option value="IE">Ireland</option><option value="NZ">New Zealand</option><option value="ZA">South Africa</option>
     </select>
     <button>Find trends</button>
+    <label class="auto" title="Re-check every 10 minutes and flag anything new in the top 10"><input type="checkbox" id="auto"> Auto-refresh</label>
   </form>
   <div class="chips" id="presets"></div>
 
@@ -104,15 +126,26 @@ const SOURCES = {
 const KEY_NAMES = { news: "Google News", reddit: "Reddit", hackernews: "Hacker News", github: "GitHub",
   bluesky: "Bluesky", mastodon: "Mastodon", devto: "DEV" };
 const PER_SOURCE = 20;
-const PRESETS = ["software", "AI", "gaming", "cybersecurity", "crypto", "music", "movies", "football", "science", "startups"];
+const PRESETS = ["software", "AI", "gaming", "cybersecurity", "crypto", "music", "movies", "football", "science", "startups", "AI vs crypto"];
+const REFRESH_MS = 10 * 60 * 1000 + 15000; // just past the server's 10-minute cache
+const ALERT_TOP = 10;
 
 const $ = (s) => document.querySelector(s);
 const esc = (s = "") => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 let data = null, activeTerm = null, activeSource = "All";
+let alerts = new Set(), timer = null;
+const TITLE = document.title;
 
 $("#presets").innerHTML = PRESETS.map((p) => `<span class="chip" data-q="${p}">${p}</span>`).join("");
 $("#presets").onclick = (e) => { const q = e.target.dataset.q; if (q) { $("#q").value = q; search(); } };
 $("#f").onsubmit = (e) => { e.preventDefault(); search(); };
+$("#auto").onchange = (e) => {
+  clearInterval(timer);
+  if (!e.target.checked) return;
+  if ("Notification" in window && Notification.permission === "default") Notification.requestPermission();
+  timer = setInterval(() => search({ silent: true }), REFRESH_MS);
+};
+document.addEventListener("visibilitychange", () => { if (!document.hidden) document.title = TITLE; });
 
 function ago(t) {
   const m = Math.round((Date.now() - new Date(t)) / 60000);
@@ -122,28 +155,121 @@ function ago(t) {
   return `${Math.round(m / 1440)}d ago`;
 }
 
-async function search() {
+async function fetchTrends(q, geo) {
+  const res = await fetch(`/api/trends?q=${encodeURIComponent(q)}&geo=${geo}`);
+  const d = await res.json();
+  if (d.error) throw new Error(d.error);
+  return d;
+}
+
+const topTerms = (d) => new Set([...d.terms.phrases.slice(0, ALERT_TOP), ...d.terms.words.slice(0, ALERT_TOP)].map((t) => t.term));
+
+// silent = an auto-refresh: keep the reader's place and flag terms new to the top 10
+async function search({ silent = false } = {}) {
   const q = $("#q").value.trim();
   if (!q) return;
   const geo = $("#geo").value;
-  history.replaceState(null, "", `?q=${encodeURIComponent(q)}&geo=${geo}`);
-  $("#out").innerHTML = `<div class="loading">Gathering trends for “${esc(q)}” from 9 sources…</div>`;
+  const pair = q.split(/\s+vs\.?\s+/i).map((s) => s.trim()).filter(Boolean);
+  if (!silent) {
+    history.replaceState(null, "", `?q=${encodeURIComponent(q)}&geo=${geo}`);
+    $("#out").innerHTML = `<div class="loading">Gathering trends for “${esc(q)}” from 9 sources…</div>`;
+  }
   try {
-    const res = await fetch(`/api/trends?q=${encodeURIComponent(q)}&geo=${geo}`);
-    data = await res.json();
-    if (data.error) throw new Error(data.error);
-    activeTerm = null; activeSource = "All";
+    if (pair.length === 2) {
+      const [a, b] = await Promise.all(pair.map((p) => fetchTrends(p, geo)));
+      data = null;
+      return renderCompare(a, b);
+    }
+    const next = await fetchTrends(q, geo);
+    if (silent && data && data.query === next.query) {
+      const before = topTerms(data);
+      alerts = new Set([...topTerms(next)].filter((t) => !before.has(t)));
+      if (alerts.size) notify(q, [...alerts]);
+      if (![...next.terms.phrases, ...next.terms.words].some((t) => t.term === activeTerm)) activeTerm = null;
+    } else {
+      alerts = new Set(); activeTerm = null; activeSource = "All";
+    }
+    data = next;
     render();
   } catch (e) {
-    $("#out").innerHTML = `<div class="loading">Something went wrong: ${esc(e.message)}</div>`;
+    if (!silent) $("#out").innerHTML = `<div class="loading">Something went wrong: ${esc(e.message)}</div>`;
   }
+}
+
+function notify(q, terms) {
+  if (document.hidden) document.title = `(${terms.length}) ${TITLE}`;
+  if ("Notification" in window && Notification.permission === "granted")
+    new Notification(`New in “${q}” top ${ALERT_TOP}`, { body: terms.join(", ") });
+}
+
+const fmt = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n);
+
+function renderCompare(a, b) {
+  const qa = esc(a.query), qb = esc(b.query);
+  // Per site, compare engagement where the site reports it, otherwise post counts.
+  // Post counts are capped by each API's page size, so engagement is the better signal.
+  const rows = Object.entries(KEY_NAMES).map(([k, s]) => {
+    const pa = a.items.filter((i) => i.source === s), pb = b.items.filter((i) => i.source === s);
+    const ea = pa.reduce((n, i) => n + (i.score || 0), 0), eb = pb.reduce((n, i) => n + (i.score || 0), 0);
+    const useEng = ea + eb > 0;
+    const va = useEng ? ea : pa.length, vb = useEng ? eb : pb.length;
+    const failed = !a.status[k].ok || !b.status[k].ok;
+    return { s, pa: pa.length, pb: pb.length, ea, eb, useEng, share: va + vb ? va / (va + vb) : null, failed };
+  });
+  const counted = rows.filter((r) => r.share !== null && !r.failed);
+  const overall = counted.length ? counted.reduce((n, r) => n + r.share, 0) / counted.length : 0.5;
+  const pct = Math.round(overall * 100);
+  const lead = pct === 50 ? `Even split` : pct > 50 ? `<span class="cmp-a">${qa}</span> leads` : `<span class="cmp-b">${qb}</span> leads`;
+
+  const rowHtml = (r) => {
+    const label = (n, e) => `${n} posts${r.useEng ? ` · ${fmt(e)} engagement` : ""}`;
+    const w = r.share === null ? 0 : r.share * 100;
+    return `<div class="cmp-row"><span>${r.s}</span>
+      <span class="bar">${r.share === null ? "" : `<i style="width:${w}%;background:var(--cmp-a)"></i><i style="width:${100 - w}%;background:var(--cmp-b)"></i>`}</span>
+      <span class="n">${r.failed ? "<span>unavailable for one topic</span>" : `<span>${label(r.pa, r.ea)}</span><span>${label(r.pb, r.eb)}</span>`}</span></div>`;
+  };
+
+  const scores = (d) => new Map([...d.terms.phrases, ...d.terms.words].map((t) => [t.term, t.score]));
+  const sa = scores(a), sb = scores(b);
+  const maxA = Math.max(1, ...sa.values()), maxB = Math.max(1, ...sb.values());
+  const shared = [...sa.keys()].filter((t) => sb.has(t))
+    .sort((x, y) => (sb.get(y) / maxB + sa.get(y) / maxA) - (sb.get(x) / maxB + sa.get(x) / maxA)).slice(0, 20);
+  const only = (m, other) => [...m.entries()].filter(([t]) => !other.has(t)).sort((x, y) => y[1] - x[1]).slice(0, 20).map(([t]) => t);
+  const chips = (list, empty) => list.length
+    ? `<div class="cloud">${list.map((t) => `<span class="chip">${esc(t)}</span>`).join("")}</div>` : `<p class="empty">${empty}</p>`;
+
+  $("#out").innerHTML = `
+    <div class="status"><span>Comparing <b class="cmp-a">${qa}</b> and <b class="cmp-b">${qb}</b></span><span>· updated ${ago(a.fetchedAt)}</span></div>
+    <div class="panel">
+      <h2>Who's getting more attention</h2>
+      <p class="big">${lead}: <span class="cmp-a">${pct}%</span> vs <span class="cmp-b">${100 - pct}%</span>
+        <span class="empty">· averaged over ${counted.length} sites</span></p>
+      <div class="cmp-head"><span class="cmp-a">${qa}</span><span class="cmp-b">${qb}</span></div>
+      ${rows.map(rowHtml).join("")}
+      <p class="sub" style="margin-top:10px">Google Trends: ${a.googleTrends.matches.length} of today's top searches mention ${qa},
+        ${b.googleTrends.matches.length} mention ${qb}.</p>
+    </div>
+    <div class="cmp-grid">
+      <div class="panel"><h2 class="cmp-a">Only in ${qa}</h2>${chips(only(sa, sb), "Nothing unique.")}</div>
+      <div class="panel"><h2>Trending in both</h2><p class="sub">Words and phrases both topics are talking about.</p>
+        ${chips(shared, "No overlap right now.")}</div>
+      <div class="panel"><h2 class="cmp-b">Only in ${qb}</h2>${chips(only(sb, sa), "Nothing unique.")}</div>
+    </div>`;
+}
+
+// Movement since the snapshot the server compared against (undefined = no history yet)
+function move(t) {
+  if (t.prevRank === undefined) return "";
+  if (t.prevRank === null) return `<span class="mv new">new</span>`;
+  const d = t.prevRank - t.rank;
+  return d > 0 ? `<span class="mv up">▲${d}</span>` : d < 0 ? `<span class="mv down">▼${-d}</span>` : "";
 }
 
 function termRow(t, max) {
   const share = (t.score / max) * 100;
   const segs = t.sources.map((s) => `<i style="width:${share / t.sources.length}%;background:${SOURCES[s]}"></i>`).join("");
-  return `<div class="term ${activeTerm === t.term ? "on" : ""}" data-term="${esc(t.term)}">
-    <span class="name">${esc(t.term)}</span>
+  return `<div class="term ${activeTerm === t.term ? "on" : ""} ${alerts.has(t.term) ? "alert" : ""}" data-term="${esc(t.term)}">
+    <span class="name">${esc(t.term)}${move(t)}</span>
     <span class="n">${t.count} posts · ${t.sources.length} site${t.sources.length > 1 ? "s" : ""}</span>
     <span class="bar">${segs}</span></div>`;
 }
@@ -172,6 +298,12 @@ function render() {
   const gtHtml = (gt.matches.length ? "" : `<p class="empty">Nothing about “${esc(d.query)}” in today's top searches. All top searches right now:</p>`)
     + [...gt.matches, ...gt.top.filter((t) => !matched.has(t.term))].map(gtRow).join("");
 
+  const ch = d.changes || { comparedAt: null, dropped: {} };
+  const since = ch.comparedAt ? ` ▲▼ show movement since ${ago(ch.comparedAt)}.` : "";
+  const dropped = (kind) => (ch.dropped[kind] || []).length
+    ? `<p class="dropped">No longer trending: ${ch.dropped[kind].map(esc).join(", ")}</p>` : "";
+  const legend = Object.entries(SOURCES).map(([s, c]) => `<span><span class="dot" style="background:${c}"></span>${s}</span>`).join("");
+
   const wikiHtml = d.wikipedia.length
     ? d.wikipedia.slice(0, 8).map((w) => {
         const pct = Math.round((w.change - 1) * 100);
@@ -180,19 +312,25 @@ function render() {
       }).join("")
     : `<p class="empty">No Wikipedia data.</p>`;
 
-  $("#out").innerHTML = `
+  const banner = alerts.size
+    ? `<div class="banner"><b>New in the top ${ALERT_TOP}:</b> ${[...alerts].map(esc).join(", ")}</div>` : "";
+
+  $("#out").innerHTML = `${banner}
     <div class="status">${status}<span>· updated ${ago(d.fetchedAt)}</span></div>
     <div class="grid">
       <div>
         <div class="panel">
           <h2>Trending phrases</h2>
-          <p class="sub">Word pairs showing up across many posts. Click one to see the posts.</p>
+          <p class="sub">Word pairs showing up across many posts. Click one to see the posts.${since}</p>
+          <div class="legend">${legend}</div>
           ${phrases.length ? phrases.slice(0, 12).map((t) => termRow(t, maxP)).join("") : `<p class="empty">Not enough overlap yet.</p>`}
+          ${dropped("phrases")}
         </div>
         <div class="panel">
           <h2>Trending words</h2>
-          <p class="sub">Ranked by how many people use them, engagement, and how many sites they appear on. Bar colours show which sites.</p>
+          <p class="sub">Ranked by how many people use them, engagement, and how many sites they appear on. Bar colours show which sites.${since}</p>
           ${words.slice(0, 25).map((t) => termRow(t, maxW)).join("")}
+          ${dropped("words")}
         </div>
       </div>
       <div>
