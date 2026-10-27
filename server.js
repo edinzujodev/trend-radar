@@ -146,7 +146,8 @@ const sources = {
     return real.map((r) => ({
       source: "GitHub",
       title: r.full_name,
-      text: [r.description || "", ...(r.topics || [])].join(" "),
+      text: r.description || "",
+      tags: r.topics || [],
       url: r.html_url,
       time: r.created_at,
       score: r.stargazers_count,
@@ -209,7 +210,8 @@ const sources = {
     return data.map((a) => ({
       source: "DEV",
       title: a.title,
-      text: (a.description || "") + " " + (a.tag_list || []).join(" "),
+      text: a.description || "",
+      tags: a.tag_list || [],
       url: a.url,
       time: a.published_at,
       score: a.positive_reactions_count + a.comments_count,
@@ -333,6 +335,8 @@ function trendingTerms(items, query) {
       if (isWord(a)) seen.add(a);
       if (b && isWord(a) && isWord(b)) seen.add(a + " " + b);
     }
+    // Tags count as words but never form phrases: neighbouring tags in a list aren't a phrase
+    for (const tag of it.tags || []) for (const w of tokens(tag)) if (isWord(w)) seen.add(w);
     for (const t of seen) {
       if (!terms.has(t)) terms.set(t, { term: t, count: 0, weight: 0, sources: new Set(), authors: new Map(), items: [] });
       const e = terms.get(t);
@@ -368,12 +372,19 @@ function trendingTerms(items, query) {
     }))
     .sort((a, b) => b.score - a.score);
 
-  // Drop single words that are almost always part of a higher-ranked phrase
-  const phrases = ranked.filter((t) => t.term.includes(" ")).slice(0, 25);
-  const words = ranked
+  // Two people on one site is often a bot pair or coincidence; ask for a second site or a third
+  // person. Niche topics may not have enough of those, so fall back to the looser list.
+  const solid = (t) => t.sources.length >= 2 || t.count >= 3;
+  const pick = (list, n) => {
+    const strict = list.filter(solid);
+    return (strict.length >= Math.min(8, n) ? strict : list).slice(0, n);
+  };
+
+  // Drop single words that are mostly just part of a higher-ranked phrase ("open" next to "open source")
+  const phrases = pick(ranked.filter((t) => t.term.includes(" ")), 25);
+  const words = pick(ranked
     .filter((t) => !t.term.includes(" "))
-    .filter((w) => !phrases.some((p) => p.term.split(" ").includes(w.term) && p.count >= w.count * 0.8))
-    .slice(0, 40);
+    .filter((w) => !phrases.some((p) => p.term.split(" ").includes(w.term) && p.count >= w.count * 0.6)), 40);
   return { phrases, words };
 }
 
@@ -403,13 +414,27 @@ function withTrend(items, terms) {
 
 // ---------- history (rising / falling) ----------
 
-// Each fresh fetch saves the ranked term lists, so the next one can say what moved.
-// Comparing with a snapshot at least an hour old keeps 10-minute refreshes from showing only noise.
+// Each fresh fetch saves the ranked terms with their scores, so later fetches can say what moved
+// and draw each term over time. Comparing with a snapshot at least an hour old keeps 10-minute
+// refreshes from showing only noise; snapshots closer than 30 minutes replace each other, so
+// ~400 of them cover about two weeks of regular checking.
 const HISTORY_FILE = path.join(__dirname, "data", "history.json");
-const HISTORY_KEEP = 72;
+const HISTORY_KEEP = 400;
 const COMPARE_AFTER_MS = 60 * 60 * 1000;
+const MERGE_WITHIN_MS = 30 * 60 * 1000;
+const WEEK_MS = 7 * 864e5;
+const TIMELINE_TERMS = 8;
+const TIMELINE_POINTS = 60;
 let historyDb = {};
 try { historyDb = JSON.parse(fs.readFileSync(HISTORY_FILE, "utf8")); } catch {}
+
+// Older snapshots stored bare term lists; newer ones store [term, score] pairs
+const entries = (snap, kind) => (snap[kind] || []).map((e) => (Array.isArray(e) ? e : [e, null]));
+const namesOf = (snap, kind) => entries(snap, kind).map((e) => e[0]);
+const scoreIn = (snap, term) => {
+  for (const kind of ["phrases", "words"]) for (const [t, s] of entries(snap, kind)) if (t === term) return s;
+  return 0; // below the saved top lists
+};
 
 function withHistory(key, terms) {
   const snaps = historyDb[key] || [];
@@ -418,7 +443,7 @@ function withHistory(key, terms) {
 
   const out = { comparedAt: prev ? new Date(prev.at).toISOString() : null, dropped: {} };
   for (const kind of ["phrases", "words"]) {
-    const before = prev ? prev[kind] : null;
+    const before = prev ? namesOf(prev, kind) : null;
     terms[kind].forEach((t, i) => {
       t.rank = i + 1;
       if (before) t.prevRank = before.indexOf(t.term) + 1 || null; // null = new since then
@@ -427,8 +452,28 @@ function withHistory(key, terms) {
     out.dropped[kind] = before ? before.filter((t) => !nowSet.has(t)).slice(0, 10) : [];
   }
 
-  snaps.push({ at: now, phrases: terms.phrases.map((t) => t.term), words: terms.words.map((t) => t.term) });
+  const snap = { at: now, phrases: terms.phrases.map((t) => [t.term, t.score]), words: terms.words.map((t) => [t.term, t.score]) };
+  if (snaps.length && now - snaps[snaps.length - 1].at < MERGE_WITHIN_MS) snaps[snaps.length - 1] = snap;
+  else snaps.push(snap);
   historyDb[key] = snaps.slice(-HISTORY_KEEP);
+
+  // Last 7 days, thinned to at most TIMELINE_POINTS, for the top phrases and words now
+  const week = historyDb[key].filter((s) => now - s.at <= WEEK_MS);
+  const step = Math.max(1, Math.ceil(week.length / TIMELINE_POINTS));
+  const points = week.filter((_, i) => i % step === 0 || i === week.length - 1);
+  const top = [...terms.phrases.slice(0, TIMELINE_TERMS / 2), ...terms.words.slice(0, TIMELINE_TERMS / 2)].map((t) => t.term);
+  out.timeline = { at: points.map((s) => new Date(s.at).toISOString()), series: top.map((term) => ({ term, scores: points.map((s) => scoreIn(s, term)) })) };
+
+  // Rising this week: now vs the oldest snapshot in the last 7 days, if it's at least 6 hours old
+  const base = week.find((s) => now - s.at >= 6 * 36e5 && entries(s, "words")[0]?.[1] !== null);
+  out.weekly = base ? {
+    since: new Date(base.at).toISOString(),
+    rising: [...terms.phrases.slice(0, 25), ...terms.words.slice(0, 40)]
+      .map((t) => ({ term: t.term, now: t.score, then: scoreIn(base, t.term) }))
+      .filter((r) => r.now > r.then)
+      .sort((a, b) => (b.now - b.then) - (a.now - a.then))
+      .slice(0, 10),
+  } : null;
   try {
     fs.mkdirSync(path.dirname(HISTORY_FILE), { recursive: true });
     fs.writeFileSync(HISTORY_FILE, JSON.stringify(historyDb));
