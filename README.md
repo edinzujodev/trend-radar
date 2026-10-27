@@ -52,8 +52,11 @@ Results are cached for 10 minutes per topic.
 
 ## Features
 
-- **Rising and falling.** Every fresh fetch saves the ranked term lists to `data/history.json` (git-ignored). The next search for the same topic marks terms as NEW, ▲ or ▼ and lists what dropped off, compared with the last check that's at least an hour old (or the latest one if there's none that old).
-- **Trending posts per site.** Each site shows its top 20 posts by how fast they're gaining engagement. Reddit keeps its own "top today" order; Google News stories are ranked by how many trending terms they contain.
+- **Dashboard.** Headline numbers, a top-10 trends chart and a "What's moving" list, with tabs for *Posts*, *Search & Wikipedia* and *Over time*. Click any trend for a side panel with where it comes from, its history and the posts behind it.
+- **Rising and falling.** Every fresh fetch saves the ranked terms and their scores to `data/history.json` (git-ignored; set `HISTORY_FILE` to store it elsewhere). The next search for the same topic marks terms as NEW, ▲ or ▼ and lists what dropped off, compared with the last check that's at least an hour old. Checks less than 30 minutes apart replace each other, so the file keeps about two weeks.
+- **Over time.** A line chart of the top terms across the last 7 days of checks, and "Rising this week": what grew most since the oldest check from that week. History only builds while the topic gets searched, so leave *Auto-refresh* on or search it regularly.
+- **Trending posts per site.** Each site shows its top 5 posts (up to 20 with *Show more*) by how fast they're gaining engagement. Reddit keeps its own "top today" order; Google News stories are ranked by how many trending terms they contain.
+- **Spam filtering.** A term needs two sites or three different people. Copy-paste posts are collapsed even when their titles differ, GitHub tag lists never form phrases, and repos posing as downloads, cheats or spoofers are dropped.
 - **Compare two topics.** Search `AI vs crypto` to see which gets more attention on each site, the terms they share, and the terms unique to each.
 - **Auto-refresh.** Tick *Auto-refresh* to re-check every 10 minutes. Terms that newly enter the top 10 are flagged on the page, in the tab title, and as a browser notification if you allow it.
 

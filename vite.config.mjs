@@ -6,6 +6,6 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   root: "client",
   plugins: [react()],
-  // antd alone is ~800 kB minified (~260 kB gzipped); that's expected, not worth splitting for one page
-  build: { outDir: "../dist", emptyOutDir: true, chunkSizeWarningLimit: 1000 },
+  // antd is ~850 kB and the lazy-loaded charts chunk ~1.5 MB minified (275/430 kB gzipped); both expected
+  build: { outDir: "../dist", emptyOutDir: true, chunkSizeWarningLimit: 1600 },
 });

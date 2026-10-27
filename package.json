@@ -12,6 +12,7 @@
     "node": ">=20.19"
   },
   "dependencies": {
+    "@ant-design/charts": "^2.6.7",
     "@ant-design/icons": "^6.3.4",
     "antd": "^6.6.8",
     "react": "^19.3.1",

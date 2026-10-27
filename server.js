@@ -103,7 +103,8 @@ const sources = {
 
   async reddit(q) {
     const xml = await get(`https://www.reddit.com/search.rss?q=${encodeURIComponent(q)}&sort=top&t=day&limit=50`, "text");
-    return blocks(xml, "entry").map((e) => {
+    // Search also returns matching subreddits and users; only links to /comments/ are posts
+    return blocks(xml, "entry").filter((e) => /<link href="[^"]*\/comments\//.test(e)).map((e) => {
       const link = (e.match(/<link href="([^"]+)"/) || [])[1] || "";
       const sub = (e.match(/<category term="([^"]+)"/) || [])[1] || "";
       const user = tag(e, "name");
@@ -140,8 +141,9 @@ const sources = {
     const data = await get(
       `https://api.github.com/search/repositories?q=${encodeURIComponent(q)}+created:>${since}&sort=stars&order=desc&per_page=30`
     );
-    // New repos impersonating paid apps ("X for Windows, download") are malware bait with bought stars
-    const bait = /\b(download|unlock|activat\w*|for (windows|pc|mac)|windows 1[01]|installer)\b/i;
+    // New repos impersonating paid apps ("X for Windows, download") or game cheats/spoofers are
+    // malware bait with bought stars
+    const bait = /\b(download|unlock|activat\w*|for (windows|pc|mac)|windows 1[01]|installer|spoofer|hwid|cheats?|aimbot|injector|executor)\b/i;
     const real = data.items.filter((r) => r.language && !bait.test(`${r.description} ${(r.topics || []).join(" ")}`));
     return real.map((r) => ({
       source: "GitHub",
@@ -285,9 +287,12 @@ function cleanItems(items) {
   return items.filter((it) => {
     const body = `${it.title} ${it.text || ""}`;
     if (SPAM.test(body)) return false;
-    const sig = it.source + "|" + body.toLowerCase().replace(/https?:\/\/\S+|[^a-z]+/g, "").slice(0, 80);
-    if (seen.has(sig)) return false;
-    seen.add(sig);
+    const norm = (x) => x.toLowerCase().replace(/https?:\/\/\S+|[^a-z]+/g, "").slice(0, 80);
+    const sigs = [it.source + "|" + norm(body)];
+    // Bot networks also reuse one long description under different titles (repo names)
+    if ((it.text || "").length >= 60) sigs.push(it.source + "|text|" + norm(it.text));
+    if (sigs.some((x) => seen.has(x))) return false;
+    sigs.forEach((x) => seen.add(x));
     return true;
   });
 }
@@ -418,7 +423,7 @@ function withTrend(items, terms) {
 // and draw each term over time. Comparing with a snapshot at least an hour old keeps 10-minute
 // refreshes from showing only noise; snapshots closer than 30 minutes replace each other, so
 // ~400 of them cover about two weeks of regular checking.
-const HISTORY_FILE = path.join(__dirname, "data", "history.json");
+const HISTORY_FILE = process.env.HISTORY_FILE || path.join(__dirname, "data", "history.json"); // override for a host's persistent disk
 const HISTORY_KEEP = 400;
 const COMPARE_AFTER_MS = 60 * 60 * 1000;
 const MERGE_WITHIN_MS = 30 * 60 * 1000;
@@ -458,14 +463,15 @@ function withHistory(key, terms) {
   historyDb[key] = snaps.slice(-HISTORY_KEEP);
 
   // Last 7 days, thinned to at most TIMELINE_POINTS, for the top phrases and words now
-  const week = historyDb[key].filter((s) => now - s.at <= WEEK_MS);
+  // Older snapshots without scores can't be drawn, so they're left out
+  const week = historyDb[key].filter((s) => now - s.at <= WEEK_MS && entries(s, "words")[0]?.[1] != null);
   const step = Math.max(1, Math.ceil(week.length / TIMELINE_POINTS));
   const points = week.filter((_, i) => i % step === 0 || i === week.length - 1);
   const top = [...terms.phrases.slice(0, TIMELINE_TERMS / 2), ...terms.words.slice(0, TIMELINE_TERMS / 2)].map((t) => t.term);
   out.timeline = { at: points.map((s) => new Date(s.at).toISOString()), series: top.map((term) => ({ term, scores: points.map((s) => scoreIn(s, term)) })) };
 
   // Rising this week: now vs the oldest snapshot in the last 7 days, if it's at least 6 hours old
-  const base = week.find((s) => now - s.at >= 6 * 36e5 && entries(s, "words")[0]?.[1] !== null);
+  const base = week.find((s) => now - s.at >= 6 * 36e5);
   out.weekly = base ? {
     since: new Date(base.at).toISOString(),
     rising: [...terms.phrases.slice(0, 25), ...terms.words.slice(0, 40)]

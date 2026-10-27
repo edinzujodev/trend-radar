@@ -1,9 +1,13 @@
-import { useRef } from "react";
-import { Avatar, Card, Col, Flex, Grid, Row, Typography } from "antd";
-import { KEY_NAMES, SOURCES, ago } from "../lib.js";
+import { Suspense, lazy, useState } from "react";
+import { Card, Col, Empty, Flex, Row, Segmented, Skeleton, Statistic, Tabs, Typography } from "antd";
+import { KEY_NAMES, SOURCES, TOP_CHART, ago, moveLabel, movers as getMovers, topOverall } from "../lib.js";
 import TermList, { Move } from "./TermList.jsx";
 import PostsPanel from "./PostsPanel.jsx";
+import TermDrawer from "./TermDrawer.jsx";
 import { GooglePanel, WikiPanel } from "./SearchPanels.jsx";
+// Charts are ~1.5 MB, so they load only once results are on screen
+const TopTrendsChart = lazy(() => import("./Charts.jsx").then((m) => ({ default: m.TopTrendsChart })));
+const TimelineChart = lazy(() => import("./Charts.jsx").then((m) => ({ default: m.TimelineChart })));
 
 export function SourceStatus({ status, fetchedAt }) {
   return (
@@ -18,98 +22,137 @@ export function SourceStatus({ status, fetchedAt }) {
   );
 }
 
-function Section({ n, title, children }) {
+const since = (ch) => ch.comparedAt ? ago(ch.comparedAt).replace("just now", "moments ago") : null;
+
+function Kpis({ d, moving }) {
+  const ok = Object.values(d.status).filter((v) => v.ok).length;
+  const top = moving[0];
+  const card = (title, value, extra) => (
+    <Col xs={12} lg={6}><Card size="small" style={{ height: "100%" }}><Statistic title={title} value={value} {...extra} /></Card></Col>
+  );
   return (
-    <section style={{ marginTop: 32 }}>
-      <Flex align="center" gap={10} style={{ marginBottom: 4 }}>
-        <Avatar size={28} style={{ background: "var(--cmp-a)", flex: "none" }}>{n}</Avatar>
-        <Typography.Title level={4} style={{ margin: 0 }}>{title}</Typography.Title>
-      </Flex>
-      {children}
-    </section>
+    <Row gutter={[16, 16]}>
+      {card("Posts scanned", d.items.length)}
+      {card("Sites responding", ok, { suffix: `/ ${Object.keys(d.status).length}` })}
+      {card("Rising or new", moving.length, { suffix: since(d.changes || {}) ? <Typography.Text type="secondary" style={{ fontSize: 13 }}>since {since(d.changes)}</Typography.Text> : null })}
+      {card("Biggest riser", top ? top.term : "—", { suffix: top ? <Typography.Text type={top.prevRank === null ? undefined : "success"} style={{ fontSize: 14 }}>{moveLabel(top)}</Typography.Text> : null, styles: { content: { fontSize: 20 } } })}
+    </Row>
   );
 }
 
-function Dropped({ list }) {
-  if (!list || !list.length) return null;
-  return <Typography.Paragraph type="secondary" style={{ fontSize: 12.5, margin: "10px 8px 0" }}>No longer trending: {list.join(", ")}</Typography.Paragraph>;
+function Overview({ d, alerts, onPick, moving }) {
+  const [kind, setKind] = useState("phrases");
+  const ch = d.changes || { dropped: {} };
+  const dropped = [...(ch.dropped.phrases || []), ...(ch.dropped.words || [])].slice(0, 12);
+  return (
+    <Flex vertical gap={16}>
+      <Row gutter={[16, 16]} align="stretch">
+        <Col xs={24} lg={15}>
+          <Card title={`Top ${TOP_CHART} trends right now`} style={{ height: "100%" }}
+            extra={<Typography.Text type="secondary" style={{ fontSize: 12 }}>Click a bar for details</Typography.Text>}>
+            {d.terms.words.length ? <Suspense fallback={<Skeleton active />}><TopTrendsChart terms={topOverall(d, TOP_CHART)} onPick={onPick} /></Suspense> : <Empty description="Not enough posts yet" />}
+          </Card>
+        </Col>
+        <Col xs={24} lg={9}>
+          <Card title="What's moving" style={{ height: "100%" }}
+            extra={since(ch) && <Typography.Text type="secondary" style={{ fontSize: 12 }}>vs {since(ch)}</Typography.Text>}>
+            {!ch.comparedAt && <Typography.Text type="secondary">Search this topic again later to see what's rising and falling.</Typography.Text>}
+            {ch.comparedAt && !moving.length && <Typography.Text type="secondary">Nothing has moved much since the last check.</Typography.Text>}
+            {moving.slice(0, 8).map((t) => (
+              <Flex key={t.term} justify="space-between" style={{ padding: "6px 0", cursor: "pointer" }} onClick={() => onPick(t.term)}>
+                <Typography.Text strong>{t.term}</Typography.Text><Move t={t} />
+              </Flex>
+            ))}
+            {dropped.length > 0 && (
+              <Typography.Paragraph type="secondary" style={{ fontSize: 12.5, marginTop: 12, marginBottom: 0 }}>
+                No longer trending: {dropped.join(", ")}
+              </Typography.Paragraph>
+            )}
+          </Card>
+        </Col>
+      </Row>
+      <Card title="All trending terms" extra={
+        <Segmented size="small" value={kind} onChange={setKind}
+          options={[{ value: "phrases", label: `Phrases ${d.terms.phrases.length}` }, { value: "words", label: `Words ${d.terms.words.length}` }]} />
+      }>
+        <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
+          {kind === "phrases" ? "Two-word phrases, usually the clearest sign of what the story is." : "Single words, ranked by how many people use them, engagement, and how many sites they're on."}
+          {" "}Bar colours show which sites.
+        </Typography.Paragraph>
+        <Row gutter={24}>
+          {[0, 1].map((half) => {
+            const list = d.terms[kind];
+            const mid = Math.ceil(list.length / 2);
+            return (
+              <Col key={half} xs={24} md={12}>
+                <TermList terms={half ? list.slice(mid) : list.slice(0, mid)} max={list[0]?.score} empty={half ? "" : "Not enough overlap yet."}
+                  alerts={alerts} activeTerm={null} onPick={onPick} />
+              </Col>
+            );
+          })}
+        </Row>
+      </Card>
+    </Flex>
+  );
 }
 
-export default function TopicView({ data: d, alerts, activeTerm, setActiveTerm, activeSource, setActiveSource }) {
-  const posts = useRef(null);
-  const screens = Grid.useBreakpoint();
-  const { phrases, words } = d.terms;
-  const ch = d.changes || { comparedAt: null, dropped: {} };
+function OverTime({ d, onPick }) {
+  const ch = d.changes || {};
+  const tl = ch.timeline;
+  const enough = tl && tl.at.length > 1;
+  return (
+    <Flex vertical gap={16}>
+      <Card title="Top trends over time" extra={enough && <Typography.Text type="secondary" style={{ fontSize: 12 }}>{tl.at.length} checks since {ago(tl.at[0])}</Typography.Text>}>
+        {enough ? <Suspense fallback={<Skeleton active />}><TimelineChart timeline={tl} /></Suspense> : (
+          <Empty description="Not enough history yet. Every search of this topic saves a check; come back later or turn on auto-refresh." />
+        )}
+      </Card>
+      <Card title="Rising this week" extra={ch.weekly && <Typography.Text type="secondary" style={{ fontSize: 12 }}>compared with {ago(ch.weekly.since)}</Typography.Text>}>
+        {!ch.weekly && <Typography.Text type="secondary">Needs a check from at least 6 hours ago.</Typography.Text>}
+        {ch.weekly && !ch.weekly.rising.length && <Typography.Text type="secondary">Nothing has grown since then.</Typography.Text>}
+        {ch.weekly?.rising.map((r) => (
+          <Flex key={r.term} justify="space-between" align="center" gap={12} style={{ padding: "6px 0", cursor: "pointer" }} onClick={() => onPick(r.term)}>
+            <Typography.Text strong>{r.term}</Typography.Text>
+            <Typography.Text type="success">{r.then ? `+${Math.round((r.now / r.then - 1) * 100)}%` : "new"}</Typography.Text>
+          </Flex>
+        ))}
+      </Card>
+    </Flex>
+  );
+}
 
-  // At a glance: the top few terms and what's moving, in plain words
-  const ok = Object.values(d.status).filter((v) => v.ok).length;
-  const lead = (phrases.length ? phrases : words).slice(0, 3);
-  const movers = [...phrases.slice(0, 12), ...words.slice(0, 25)]
-    .filter((t) => t.prevRank === null || t.prevRank - t.rank >= 3)
-    .sort((a, b) => (b.prevRank === null) - (a.prevRank === null) || (b.prevRank - b.rank) - (a.prevRank - a.rank))
-    .slice(0, 4);
-
-  const pick = (term) => {
-    setActiveTerm(term);
-    if (term && !screens.lg) posts.current?.scrollIntoView({ behavior: "smooth" });
-  };
-  const termProps = { alerts, activeTerm, onPick: pick };
+export default function TopicView({ data: d, alerts, activeTerm, setActiveTerm }) {
+  const [tab, setTab] = useState("overview");
+  const moving = getMovers(d);
+  // Phrases say what the story is ("open source"); single words ("code") rarely do
+  const lead = (d.terms.phrases.length >= 3 ? d.terms.phrases : topOverall(d, 3)).slice(0, 3);
 
   return (
-    <>
-      <Card title={`“${d.query}” right now`}>
-        <Typography.Paragraph style={{ fontSize: 17 }}>
-          Across {d.items.length} posts from {ok} sites in the last day or two, the biggest talking points are{" "}
-          {lead.length ? lead.map((t, i) => <span key={t.term}>{i ? ", " : ""}<b>{t.term}</b></span>) : "still unclear (not enough overlap)"}.
+    <Flex vertical gap={16}>
+      <div>
+        <Typography.Title level={3} style={{ marginBottom: 4 }}>“{d.query}” right now</Typography.Title>
+        <Typography.Paragraph type="secondary" style={{ fontSize: 15, marginBottom: 8 }}>
+          The biggest talking points across {Object.values(d.status).filter((v) => v.ok).length} sites in the last day or two:{" "}
+          {lead.length ? lead.map((t, i) => <span key={t.term}>{i ? ", " : ""}<Typography.Link strong onClick={() => setActiveTerm(t.term)}>{t.term}</Typography.Link></span>) : "not clear yet"}.
         </Typography.Paragraph>
-        {movers.length > 0 && (
-          <Typography.Paragraph>
-            Moving fastest: {movers.map((t, i) => <span key={t.term}>{i ? " · " : ""}<b>{t.term}</b><Move t={t} /></span>)}
-          </Typography.Paragraph>
-        )}
         <SourceStatus status={d.status} fetchedAt={d.fetchedAt} />
-      </Card>
+      </div>
 
-      <Section n={1} title="What people are saying">
-        <Typography.Paragraph type="secondary" style={{ maxWidth: 900 }}>
-          Words and phrases that keep coming up in posts about “{d.query}”, next to the posts themselves. Click a word to see only the posts that use it.
-          <br />
-          <span style={{ fontSize: 12.5 }}>
-            Longer bar = stronger trend · bar colours = which sites
-            {ch.comparedAt && ` · ▲▼ and NEW = change since the check ${ago(ch.comparedAt).replace("just now", "moments ago")}`}
-          </span>
-        </Typography.Paragraph>
-        <Row gutter={[16, 16]} align="top">
-          <Col xs={24} lg={9}>
-            <Flex vertical gap={16}>
-              <Card title="Trending phrases">
-                <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>Two-word phrases. Usually the clearest sign of what the story is.</Typography.Paragraph>
-                <TermList terms={phrases.slice(0, 12)} empty="Not enough overlap yet." {...termProps} />
-                <Dropped list={ch.dropped.phrases} />
-              </Card>
-              <Card title="Trending words">
-                <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
-                  Single words, ranked by how many people use them, how much engagement those posts get, and how many sites they're on.
-                </Typography.Paragraph>
-                <TermList terms={words.slice(0, 25)} empty="No words yet." {...termProps} />
-                <Dropped list={ch.dropped.words} />
-              </Card>
-            </Flex>
-          </Col>
-          <Col xs={24} lg={15}>
-            <PostsPanel ref={posts} data={d} activeTerm={activeTerm} clearTerm={() => setActiveTerm(null)}
-              activeSource={activeSource} setActiveSource={setActiveSource} />
-          </Col>
-        </Row>
-      </Section>
+      <Kpis d={d} moving={moving} />
 
-      <Section n={2} title="What people are searching and reading">
-        <Typography.Paragraph type="secondary">Signals from outside social media: what's spiking on Google and Wikipedia.</Typography.Paragraph>
-        <Row gutter={[16, 16]} align="top">
-          <Col xs={24} md={12}><GooglePanel data={d} /></Col>
-          <Col xs={24} md={12}><WikiPanel data={d} /></Col>
-        </Row>
-      </Section>
-    </>
+      <Tabs activeKey={tab} onChange={setTab} size="large" items={[
+        { key: "overview", label: "Overview", children: <Overview d={d} alerts={alerts} onPick={setActiveTerm} moving={moving} /> },
+        { key: "posts", label: "Posts", children: <PostsPanel data={d} /> },
+        { key: "search", label: "Search & Wikipedia", children: (
+          <Row gutter={[16, 16]} align="top">
+            <Col xs={24} md={12}><GooglePanel data={d} /></Col>
+            <Col xs={24} md={12}><WikiPanel data={d} /></Col>
+          </Row>
+        ) },
+        { key: "time", label: "Over time", children: <OverTime d={d} onPick={setActiveTerm} /> },
+      ]} />
+
+      <TermDrawer data={d} term={activeTerm} onClose={() => setActiveTerm(null)} />
+    </Flex>
   );
 }

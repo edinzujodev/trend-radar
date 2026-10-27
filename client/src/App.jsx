@@ -17,7 +17,6 @@ export default function App() {
   const [state, setState] = useState({ status: "idle" }); // idle | loading | error | topic | compare
   const [alerts, setAlerts] = useState(new Set());
   const [activeTerm, setActiveTerm] = useState(null);
-  const [activeSource, setActiveSource] = useState("All");
   const current = useRef(state);
   current.current = state;
 
@@ -44,7 +43,7 @@ export default function App() {
         if (fresh.length) notify(query, fresh);
         setActiveTerm((t) => (allTerms(next).some((x) => x.term === t) ? t : null));
       } else {
-        setAlerts(new Set()); setActiveTerm(null); setActiveSource("All");
+        setAlerts(new Set()); setActiveTerm(null);
       }
       setState({ status: "topic", data: next });
     } catch (e) {
@@ -115,8 +114,7 @@ export default function App() {
           )}
           {state.status === "error" && <Alert type="error" showIcon title="Something went wrong" description={state.message} />}
           {state.status === "topic" && (
-            <TopicView data={state.data} alerts={alerts} activeTerm={activeTerm} setActiveTerm={setActiveTerm}
-              activeSource={activeSource} setActiveSource={setActiveSource} />
+            <TopicView data={state.data} alerts={alerts} activeTerm={activeTerm} setActiveTerm={setActiveTerm} />
           )}
           {state.status === "compare" && <CompareView a={state.a} b={state.b} />}
         </div>

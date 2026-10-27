@@ -11,10 +11,11 @@ export function Move({ t }) {
 }
 
 // Bar length = score relative to the top term; one segment per site that uses the term
-export default function TermList({ terms, alerts, activeTerm, onPick, empty }) {
+// `max` lets a list split over two columns share one scale
+export default function TermList({ terms, alerts, activeTerm, onPick, empty, max: maxScore }) {
   const { token } = theme.useToken();
   if (!terms.length) return <Typography.Text type="secondary">{empty}</Typography.Text>;
-  const max = Math.max(1, ...terms.map((t) => t.score));
+  const max = Math.max(1, maxScore || 0, ...terms.map((t) => t.score));
   return terms.map((t) => {
     const share = (t.score / max) * 100;
     const on = activeTerm === t.term;
