@@ -1,6 +1,6 @@
 // Trend Radar: a zero-dependency Node server that gathers trending items for a topic
 // from free public sources and extracts the trending words/phrases among them.
-// Run: node server.js   then open http://localhost:3000
+// Run: npm run dev (live reload) or npm run build && npm start, then open http://localhost:3000
 
 const http = require("http");
 const fs = require("fs");
@@ -479,7 +479,7 @@ async function trends(q, geo) {
   return data;
 }
 
-http
+const server = http
   .createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
     if (url.pathname === "/api/trends") {
@@ -499,11 +499,40 @@ http
       }
       return;
     }
-    if (url.pathname === "/" || url.pathname === "/index.html") {
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      return fs.createReadStream(path.join(__dirname, "index.html")).pipe(res);
-    }
-    res.writeHead(404);
-    res.end("Not found");
-  })
-  .listen(PORT, () => console.log(`Trend Radar running at http://localhost:${PORT}`));
+    if (vite) return vite.middlewares(req, res, () => { res.writeHead(404); res.end("Not found"); });
+    serveStatic(url.pathname, res);
+  });
+
+// ---------- client ----------
+
+const DIST = path.join(__dirname, "dist");
+const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml",
+  ".png": "image/png", ".ico": "image/x-icon", ".json": "application/json", ".woff2": "font/woff2" };
+
+// Serves the Vite build; any unknown path gets index.html so ?q= links work from anywhere
+function serveStatic(pathname, res) {
+  let file;
+  try { file = path.normalize(path.join(DIST, decodeURIComponent(pathname))); } catch { file = DIST; } // malformed %-escape
+  if (!file.startsWith(DIST + path.sep) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) file = path.join(DIST, "index.html");
+  if (!fs.existsSync(file)) {
+    res.writeHead(503, { "Content-Type": "text/plain" });
+    return res.end("Client not built yet. Run `npm run build`, or use `npm run dev`.");
+  }
+  const hashed = /[\\/]assets[\\/]/.test(file); // Vite fingerprints these, so they can be cached forever
+  res.writeHead(200, { "Content-Type": TYPES[path.extname(file)] || "application/octet-stream",
+    "Cache-Control": hashed ? "public, max-age=31536000, immutable" : "no-cache" });
+  fs.createReadStream(file).pipe(res);
+}
+
+let vite = null;
+(async () => {
+  if (process.argv.includes("--dev")) {
+    const { createServer } = await import("vite");
+    vite = await createServer({
+      configFile: path.join(__dirname, "vite.config.mjs"),
+      server: { middlewareMode: true, hmr: { server } },
+      appType: "spa",
+    });
+  }
+  server.listen(PORT, () => console.log(`Trend Radar running at http://localhost:${PORT}${vite ? " (dev, live reload)" : ""}`));
+})();

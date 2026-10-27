@@ -1,0 +1,25 @@
+/* Only what antd doesn't cover: the per-site colours and the stacked trend bars */
+:root {
+  --s-news: #3b5bdb; --s-reddit: #e8590c; --s-hn: #f08c00; --s-github: #495057;
+  --s-bluesky: #1098ad; --s-mastodon: #7048e8; --s-dev: #0ca678;
+  --cmp-a: #3b5bdb; --cmp-b: #c2255c; --bar-bg: rgba(0, 0, 0, 0.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root { --s-github: #adb5bd; --s-bluesky: #15aabf; --cmp-a: #748ffc; --cmp-b: #f06595; --bar-bg: rgba(255, 255, 255, 0.1); }
+}
+body { margin: 0; }
+
+.wrap { max-width: 1200px; margin: 0 auto; padding: 24px 16px 64px; }
+
+.bar { height: 4px; border-radius: 2px; background: var(--bar-bg); overflow: hidden; display: flex; }
+.bar i { display: block; height: 100%; }
+.bar.thick { height: 8px; border-radius: 4px; }
+
+.term { padding: 6px 8px; border-radius: 8px; cursor: pointer; }
+.term.alert { box-shadow: inset 3px 0 0 #fa541c; }
+
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+
+.spark { width: 70px; height: 22px; flex: none; }
+
+mark { background: #ffe066; color: #000; border-radius: 3px; padding: 0 2px; }

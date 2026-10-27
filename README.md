@@ -4,13 +4,26 @@ Type a topic ("software", "gaming", "AI"…) and see what's trending in it right
 
 ## Run
 
-Needs Node.js 18+ and no `npm install`.
+Needs Node.js 20.19+.
 
 ```bash
-node server.js
+npm install
+npm run dev                  # development, with live reload
+npm run build && npm start   # production
 ```
 
 Then open http://localhost:3000 (to change the port, copy `.env.example` to `.env` and edit `PORT`).
+
+## Project layout
+
+| Path | What it is |
+|---|---|
+| `server.js` | Node server: fetches the sources, ranks the trends, serves `/api/trends`. No runtime dependencies. |
+| `client/` | React front end built with [Ant Design](https://ant.design/) and Vite |
+| `dist/` | The built front end (`npm run build`), served by `npm start`. Git-ignored. |
+| `data/history.json` | Saved rankings for the rising/falling markers. Git-ignored. |
+
+In development, `server.js --dev` runs Vite inside the same server, so there's one port and no proxy to set up.
 
 ## Sources (all free, no API keys)
 
