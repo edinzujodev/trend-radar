@@ -1,5 +1,5 @@
 import { Suspense, lazy, useState } from "react";
-import { Button, Card, Col, Empty, Flex, Row, Segmented, Skeleton, Statistic, Tabs, Tag, Typography } from "antd";
+import { Button, Card, Col, Empty, Flex, Row, Segmented, Skeleton, Statistic, Tabs, Tag, Tooltip, Typography } from "antd";
 import { KEY_NAMES, PRESETS, SOURCES, TOP_CHART, ago, moveLabel, movers as getMovers, topOverall } from "../lib.js";
 import TermList, { Move } from "./TermList.jsx";
 import PostsPanel from "./PostsPanel.jsx";
@@ -13,11 +13,22 @@ const TimelineChart = lazy(() => import("./Charts.jsx").then((m) => ({ default: 
 export function SourceStatus({ status, fetchedAt }) {
   return (
     <Flex wrap gap="4px 14px" style={{ fontSize: 13 }}>
-      {Object.entries(status).map(([k, v]) => v.ok ? (
-        <Typography.Text key={k} type="secondary"><span className="dot" style={{ background: SOURCES[KEY_NAMES[k]] }} />{KEY_NAMES[k]} {v.count}</Typography.Text>
-      ) : (
-        <Typography.Text key={k} type="danger" title={v.error}>✕ {KEY_NAMES[k]} unavailable</Typography.Text>
-      ))}
+      {Object.entries(status).map(([k, v]) => {
+        const limited = /rate limit|429/i.test(v.error || "");
+        if (v.ok && !v.staleSince) return (
+          <Typography.Text key={k} type="secondary"><span className="dot" style={{ background: SOURCES[KEY_NAMES[k]] }} />{KEY_NAMES[k]} {v.count}</Typography.Text>
+        );
+        if (v.ok) return ( // site failed this time; these are its last good results
+          <Tooltip key={k} title={`${limited ? `${KEY_NAMES[k]} is limiting requests` : `${KEY_NAMES[k]} didn't respond`} right now, so these are its results from ${ago(v.staleSince)}.`}>
+            <Typography.Text type="warning"><span className="dot" style={{ background: SOURCES[KEY_NAMES[k]] }} />{KEY_NAMES[k]} {v.count} · {ago(v.staleSince).replace(" ago", " old")}</Typography.Text>
+          </Tooltip>
+        );
+        return (
+          <Tooltip key={k} title={limited ? `${KEY_NAMES[k]} only allows a few requests a minute. Try again shortly.` : v.error}>
+            <Typography.Text type="danger">✕ {KEY_NAMES[k]} {limited ? "busy, try again shortly" : "unavailable"}</Typography.Text>
+          </Tooltip>
+        );
+      })}
       <Typography.Text type="secondary">· updated {ago(fetchedAt)}</Typography.Text>
     </Flex>
   );

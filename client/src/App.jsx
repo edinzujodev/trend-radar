@@ -20,10 +20,13 @@ export default function App() {
   const [activeTerm, setActiveTerm] = useState(null);
   const current = useRef(state);
   current.current = state;
+  const fillTimer = useRef(null);
 
-  // silent = an auto-refresh: keep the reader's place and flag terms new to the top 10
-  const search = useCallback(async (query, country, { silent = false } = {}) => {
+  // silent = an auto-refresh: keep the reader's place and flag terms new to the top 10.
+  // fill = re-asking for a site that was rate-limited: same as silent, but no alerts.
+  const search = useCallback(async (query, country, { silent = false, fill = false } = {}) => {
     query = query.trim();
+    clearTimeout(fillTimer.current);
     if (!silent) {
       const qs = new URLSearchParams({ ...(query && { q: query }), ...(country !== "US" && { geo: country }) }).toString();
       history.replaceState(null, "", qs ? `?${qs}` : location.pathname);
@@ -36,8 +39,11 @@ export default function App() {
         return setState({ status: "compare", a, b });
       }
       const next = await fetchTrends(query, country);
+      if (next.retryIn) fillTimer.current = setTimeout(() => search(query, country, { silent: true, fill: true }), (next.retryIn + 3) * 1000);
       const prev = current.current;
-      if (silent && prev.status === "topic" && prev.data.query === next.query) {
+      if (fill && prev.status === "topic" && prev.data.query === next.query) {
+        setActiveTerm((t) => (allTerms(next).some((x) => x.term === t) ? t : null));
+      } else if (silent && prev.status === "topic" && prev.data.query === next.query) {
         const before = topTerms(prev.data);
         const fresh = [...topTerms(next)].filter((t) => !before.has(t));
         setAlerts(new Set(fresh));

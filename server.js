@@ -20,11 +20,34 @@ const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 // Wikimedia and Reddit reject browser-looking agents; they ask for an honest, descriptive one
 const BOT_UA = "TrendRadar/1.0 (https://localhost; personal trend dashboard)";
 const cache = new Map();
+const lastGood = new Map(); // source|topic|geo -> last successful items, used when a site fails
 
 // ---------- helpers ----------
 
+// Reddit allows about one unauthenticated RSS request a minute. Its rate-limit headers say when
+// the window resets; until then we don't ask (and get refused), and answers are reused for 30 minutes.
+const REDDIT_CACHE_MS = 30 * 60 * 1000;
+const redditCache = new Map();
+let redditBlockedUntil = 0;
+
+async function getReddit(url) {
+  const hit = redditCache.get(url);
+  if (hit && Date.now() - hit.at < REDDIT_CACHE_MS) return hit.body;
+  const wait = redditBlockedUntil - Date.now();
+  if (wait > 0) throw Object.assign(new Error(`rate limited by Reddit, retry in ${Math.ceil(wait / 1000)}s`), { retryIn: Math.ceil(wait / 1000) });
+  const res = await fetch(url, { headers: { "User-Agent": BOT_UA, Accept: "*/*" }, signal: AbortSignal.timeout(12000) });
+  const reset = +res.headers.get("x-ratelimit-reset") || 60;
+  if (res.status === 429 || +res.headers.get("x-ratelimit-remaining") < 1) redditBlockedUntil = Date.now() + reset * 1000;
+  if (res.status === 429) throw Object.assign(new Error("HTTP 429 (rate limited by Reddit)"), { retryIn: reset });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const body = await res.text();
+  redditCache.set(url, { at: Date.now(), body });
+  return body;
+}
+
 async function get(url, type = "json", retry = true) {
-  const bot = /wikipedia.org|wikimedia.org|reddit.com/.test(url);
+  if (/reddit\.com/.test(url)) return getReddit(url);
+  const bot = /wikipedia.org|wikimedia.org/.test(url);
   const res = await fetch(url, {
     headers: { "User-Agent": bot ? BOT_UA : UA, Accept: type === "json" ? "application/json" : "*/*" },
     signal: AbortSignal.timeout(12000),
@@ -545,10 +568,21 @@ async function trends(q, geo) {
   const results = await Promise.allSettled(names.map((n) => sources[n](q, geo)));
   const status = {};
   let items = [];
+  let retryIn = 0; // seconds until a rate-limited site can be asked again
   results.forEach((r, i) => {
+    if (r.status === "rejected" && r.reason?.retryIn) retryIn = Math.max(retryIn, r.reason.retryIn);
+    const goodKey = `${names[i]}|${key}`;
     if (r.status === "fulfilled") {
       status[names[i]] = { ok: true, count: r.value.length };
       items.push(...r.value);
+      lastGood.delete(goodKey);
+      lastGood.set(goodKey, { at: Date.now(), items: r.value });
+      if (lastGood.size > 300) lastGood.delete(lastGood.keys().next().value); // oldest first
+    } else if (lastGood.has(goodKey)) {
+      // A site that's down or rate-limiting shows its last good answer, marked with its age
+      const prev = lastGood.get(goodKey);
+      status[names[i]] = { ok: true, count: prev.items.length, staleSince: new Date(prev.at).toISOString(), error: String(r.reason && r.reason.message) };
+      items.push(...prev.items);
     } else {
       status[names[i]] = { ok: false, error: String(r.reason && r.reason.message) };
     }
@@ -571,8 +605,10 @@ async function trends(q, geo) {
     wikipedia: wiki.status === "fulfilled" ? wiki.value : [],
     platforms: plat.status === "fulfilled" ? plat.value : null,
     items,
+    retryIn: retryIn || undefined,
   };
-  cache.set(key, { at: Date.now(), data });
+  // With a site still to fill in, cache only until it can be asked again, so the page's retry gets it
+  cache.set(key, { at: retryIn ? Date.now() - CACHE_MS + (retryIn + 2) * 1000 : Date.now(), data });
   return data;
 }
 

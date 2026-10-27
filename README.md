@@ -41,6 +41,8 @@ In development, `server.js --dev` runs Vite inside the same server, so there's o
 
 X/Twitter and TikTok are not included because their APIs are paid or restricted.
 
+Reddit allows only about one request a minute without an account, so its answers are kept for 30 minutes and its rate-limit headers are respected. If a topic is searched while Reddit is still limited, the page shows the rest straight away and fills Reddit in automatically once the limit resets. Any site that fails falls back to its last good answer for that topic, marked with its age.
+
 ## How "trending words" are picked
 
 Every title and post is split into words and word pairs. A term ranks higher when:
