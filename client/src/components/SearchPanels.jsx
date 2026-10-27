@@ -1,4 +1,5 @@
 import { Card, Collapse, Flex, Typography } from "antd";
+import { fmt } from "../lib.js";
 
 function GtRow({ m }) {
   return (
@@ -27,7 +28,7 @@ export function GooglePanel({ data }) {
   return (
     <Card title={`Google searches today (${data.geo})`}>
       <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
-        Today's top Google searches that mention your topic, with the news story behind each.
+        {data.query ? "Today's top Google searches that mention your topic" : "Today's top Google searches"}, with the news story behind each.
       </Typography.Paragraph>
       {gt.matches.length ? (
         <>{gt.matches.map((m) => <GtRow key={m.term} m={m} />)}{fold("Other top searches today")}</>
@@ -48,10 +49,11 @@ function Spark({ series }) {
 }
 
 export function WikiPanel({ data }) {
+  const world = !data.query;
   return (
-    <Card title="Wikipedia interest">
+    <Card title={world ? "Most-read on Wikipedia" : "Wikipedia interest"}>
       <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
-        Related articles: views over the last 2 days compared with the 2 weeks before. Green = rising.
+        {world ? "Yesterday's most-read English articles, with views compared with the 2 weeks before." : "Related articles: views over the last 2 days compared with the 2 weeks before."} Green = rising.
       </Typography.Paragraph>
       {!data.wikipedia.length && <Typography.Text type="secondary">No Wikipedia data.</Typography.Text>}
       {data.wikipedia.slice(0, 8).map((w) => {
@@ -59,6 +61,7 @@ export function WikiPanel({ data }) {
         return (
           <Flex key={w.url} align="center" gap={8} style={{ padding: "5px 0" }}>
             <Typography.Link href={w.url} target="_blank" style={{ flex: 1 }}>{w.title}</Typography.Link>
+            {world && <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: "nowrap" }}>{fmt(w.views)} views</Typography.Text>}
             <Spark series={w.series} />
             <Typography.Text strong={pct >= 15} type={pct >= 15 ? "success" : "secondary"} style={{ width: 52, textAlign: "right", fontSize: 12.5 }}>
               {pct >= 0 ? "+" : ""}{pct}%

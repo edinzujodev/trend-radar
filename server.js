@@ -147,7 +147,7 @@ const sources = {
     );
     // New repos impersonating paid apps ("X for Windows, download") or game cheats/spoofers are
     // malware bait with bought stars
-    const bait = /\b(download|unlock|activat\w*|for (windows|pc|mac)|windows 1[01]|installer|spoofer|hwid|cheats?|aimbot|injector|executor)\b/i;
+    const bait = /\b(download|unlock|activat\w*|for (windows|pc|mac)|windows 1[01]|installer|spoofer|hwid|cheats?|aimbot|injector|executor|trainer)\b/i;
     const real = data.items.filter((r) => r.language && !bait.test(`${r.description} ${(r.topics || []).join(" ")}`));
     return real.map((r) => ({
       source: "GitHub",
@@ -348,11 +348,14 @@ const STOP = new Set(
   people thing things lot something anyone everyone someone via amp http https www com org net html ago yet may might must shall
   per around across across within without way best top good great big better around being getting take takes says according
   report reports news update updates read here's video watch live today's week's yesterday tomorrow www.reddit.com reddit comments
-  points post posts thread link submitted check help question anyone just don't i'm it's that's you're can't doesn't isn't`.split(/\s+/)
+  points post posts thread link submitted check help question anyone just don't i'm it's that's you're can't doesn't isn't
+  let lets never ever keep always actually anything nothing everything everyone's lol yes yeah ok okay maybe though thing's isn't
+  pretty sure else seems seem done doing gets give gives giving found find finds put puts set sets show shows told tell tells`.split(/\s+/)
 );
 
 function tokens(text) {
-  return (text.toLowerCase().replace(/https?:\/\/\S+/g, " ").match(/[a-z0-9][a-z0-9+#.'-]*[a-z0-9+#]|[a-z0-9]/g) || [])
+  // Any letter, not just a-z, so "Pokémon" stays one word
+  return (text.toLowerCase().replace(/https?:\/\/\S+/g, " ").match(/[\p{L}\p{N}][\p{L}\p{N}+#.'-]*[\p{L}\p{N}+#]|[\p{L}\p{N}]/gu) || [])
     .map((w) => w.replace(/'s$/, ""))
     .filter((w) => w.length > 1);
 }
@@ -422,7 +425,13 @@ function trendingTerms(items, query) {
   };
 
   // Drop single words that are mostly just part of a higher-ranked phrase ("open" next to "open source")
-  const phrases = pick(ranked.filter((t) => t.term.includes(" ")), 25);
+  // Phrases drawn from exactly the same posts are one sentence read in pieces ("reusable profiles",
+  // "profiles configurable", ...), so only the strongest of each set is kept
+  const sameSet = new Set();
+  const phrases = pick(ranked.filter((t) => t.term.includes(" ")).filter((t) => {
+    const k = [...t.items].sort((a, b) => a - b).join(",");
+    return !sameSet.has(k) && sameSet.add(k);
+  }), 25);
   const words = pick(ranked
     .filter((t) => !t.term.includes(" "))
     .filter((w) => !phrases.some((p) => p.term.split(" ").includes(w.term) && p.count >= w.count * 0.6)), 40);

@@ -52,6 +52,7 @@ Results are cached for 10 minutes per topic.
 
 ## Features
 
+- **Worldwide first.** The page opens on what's trending everywhere: Google News top stories, r/popular, the Hacker News front page, this week's top new GitHub repos, Bluesky's "What's Hot" feed, Mastodon's trending posts, DEV's top articles, Google's top searches and Wikipedia's most-read articles, plus the trending lists Bluesky, Mastodon and Google publish themselves. The search box in the header only narrows this down to a topic.
 - **Dashboard.** Headline numbers, a top-10 trends chart and a "What's moving" list, with tabs for *Posts*, *Search & Wikipedia* and *Over time*. Click any trend for a side panel with where it comes from, its history and the posts behind it.
 - **Rising and falling.** Every fresh fetch saves the ranked terms and their scores to `data/history.json` (git-ignored; set `HISTORY_FILE` to store it elsewhere). The next search for the same topic marks terms as NEW, ▲ or ▼ and lists what dropped off, compared with the last check that's at least an hour old. Checks less than 30 minutes apart replace each other, so the file keeps about two weeks.
 - **Over time.** A line chart of the top terms across the last 7 days of checks, and "Rising this week": what grew most since the oldest check from that week. History only builds while the topic gets searched, so leave *Auto-refresh* on or search it regularly.

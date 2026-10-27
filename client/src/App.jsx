@@ -1,20 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { App as AntApp, Alert, Button, Flex, Input, Layout, Menu, Select, Spin, Switch, Tooltip, Typography, theme } from "antd";
-import { RiseOutlined, SearchOutlined } from "@ant-design/icons";
-import { ALERT_TOP, COUNTRIES, PRESETS, REFRESH_MS, allTerms, fetchTrends, splitCompare, topTerms } from "./lib.js";
+import { App as AntApp, Alert, Flex, Input, Layout, Select, Spin, Switch, Tooltip, Typography, theme } from "antd";
+import { RiseOutlined } from "@ant-design/icons";
+import { ALERT_TOP, COUNTRIES, REFRESH_MS, allTerms, fetchTrends, splitCompare, topTerms } from "./lib.js";
 import TopicView from "./components/TopicView.jsx";
 import CompareView from "./components/CompareView.jsx";
 
 const TITLE = document.title;
 const params = new URLSearchParams(location.search);
 
+// The page opens on worldwide trends; typing a topic only narrows them down
 export default function App() {
   const { notification } = AntApp.useApp();
   const { token } = theme.useToken();
   const [q, setQ] = useState(params.get("q") || "");
   const [geo, setGeo] = useState(params.get("geo") || "US");
   const [auto, setAuto] = useState(false);
-  const [state, setState] = useState({ status: "idle" }); // idle | loading | error | topic | compare
+  const [state, setState] = useState({ status: "loading", query: params.get("q") || "" }); // loading | error | topic | compare
   const [alerts, setAlerts] = useState(new Set());
   const [activeTerm, setActiveTerm] = useState(null);
   const current = useRef(state);
@@ -23,9 +24,9 @@ export default function App() {
   // silent = an auto-refresh: keep the reader's place and flag terms new to the top 10
   const search = useCallback(async (query, country, { silent = false } = {}) => {
     query = query.trim();
-    if (!query) return;
     if (!silent) {
-      history.replaceState(null, "", `?q=${encodeURIComponent(query)}&geo=${country}`);
+      const qs = new URLSearchParams({ ...(query && { q: query }), ...(country !== "US" && { geo: country }) }).toString();
+      history.replaceState(null, "", qs ? `?${qs}` : location.pathname);
       setState({ status: "loading", query });
     }
     try {
@@ -55,10 +56,10 @@ export default function App() {
     if (document.hidden) document.title = `(${terms.length}) ${TITLE}`;
     notification.warning({ title: `New in the top ${ALERT_TOP}`, description: terms.join(", "), duration: 0 });
     if ("Notification" in window && Notification.permission === "granted")
-      new Notification(`New in “${query}” top ${ALERT_TOP}`, { body: terms.join(", ") });
+      new Notification(`New in ${query ? `“${query}”` : "worldwide"} top ${ALERT_TOP}`, { body: terms.join(", ") });
   }
 
-  useEffect(() => { if (q) search(q, geo); }, []); // eslint-disable-line react-hooks/exhaustive-deps -- first load from ?q=
+  useEffect(() => { search(q, geo); }, []); // eslint-disable-line react-hooks/exhaustive-deps -- first load
 
   useEffect(() => {
     const reset = () => { if (!document.hidden) document.title = TITLE; };
@@ -66,9 +67,9 @@ export default function App() {
     return () => document.removeEventListener("visibilitychange", reset);
   }, []);
 
-  // Latest query/country for the timer without restarting it on every keystroke
+  // Latest filter/country for the timer without restarting it on every keystroke
   const latest = useRef({ q, geo });
-  latest.current = { q, geo };
+  latest.current = { q: state.status === "topic" ? state.data.query : q, geo };
   useEffect(() => {
     if (!auto) return;
     if ("Notification" in window && Notification.permission === "default") Notification.requestPermission();
@@ -77,47 +78,40 @@ export default function App() {
   }, [auto, search]);
 
   const run = (query = q) => { setQ(query); search(query, geo); };
-  const goHome = () => { setQ(""); setState({ status: "idle" }); history.replaceState(null, "", location.pathname); };
+  const changeGeo = (g) => { setGeo(g); search(state.status === "topic" ? state.data.query : q, g); };
 
   return (
     <Layout style={{ minHeight: "100vh" }}>
-      <Layout.Header style={{ paddingInline: 16, background: token.colorBgContainer, borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
-        <div style={{ maxWidth: 1168, margin: "0 auto" }}>
-          <Menu mode="horizontal" selectedKeys={[]} onClick={goHome}
-            style={{ fontSize: 16, fontWeight: 600, borderBottom: 0, background: "transparent" }}
-            items={[{ key: "home", icon: <RiseOutlined style={{ fontSize: 18 }} />, label: "Trend Radar" }]} />
-        </div>
-      </Layout.Header>
+      <header style={{ background: token.colorBgContainer, borderBottom: `1px solid ${token.colorBorderSecondary}`, padding: "10px 16px" }}>
+        <Flex wrap gap={12} align="center" justify="space-between" style={{ maxWidth: 1168, margin: "0 auto" }}>
+          <Typography.Link onClick={() => run("")} style={{ color: token.colorText, fontSize: 17, fontWeight: 600 }}>
+            <RiseOutlined style={{ color: token.colorPrimary, marginRight: 8 }} />Trend Radar
+          </Typography.Link>
+          <Flex wrap gap={8} align="center" style={{ flex: "1 1 420px", justifyContent: "flex-end" }}>
+            <Input.Search value={q} allowClear placeholder="Filter by topic, or compare: AI vs crypto" style={{ flex: "1 1 220px", maxWidth: 360 }}
+              onChange={(e) => setQ(e.target.value)} onSearch={(v) => run(v)} />
+            <Select value={geo} onChange={changeGeo} style={{ width: 150 }} title="Country for news and Google searches"
+              options={COUNTRIES.map(([value, label]) => ({ value, label }))} />
+            <Tooltip title="Re-check every 10 minutes and flag anything new in the top 10">
+              <Flex gap={6} align="center"><Switch size="small" checked={auto} onChange={setAuto} /><Typography.Text type="secondary">Auto-refresh</Typography.Text></Flex>
+            </Tooltip>
+          </Flex>
+        </Flex>
+      </header>
       <div className="wrap">
-
-        <Flex gap={8} wrap align="center">
-          <Input size="large" style={{ flex: "1 1 260px" }} value={q} allowClear
-            placeholder="e.g. software, AI, gaming… or compare: AI vs crypto"
-            onChange={(e) => setQ(e.target.value)} onPressEnter={() => run()} />
-          <Select size="large" value={geo} onChange={setGeo} style={{ width: 170 }} title="Country for Google News and Google Trends"
-            options={COUNTRIES.map(([value, label]) => ({ value, label }))} />
-          <Button size="large" type="primary" icon={<SearchOutlined />} onClick={() => run()}>Find trends</Button>
-          <Tooltip title="Re-check every 10 minutes and flag anything new in the top 10">
-            <Flex gap={6} align="center"><Switch size="small" checked={auto} onChange={setAuto} /><Typography.Text type="secondary">Auto-refresh</Typography.Text></Flex>
-          </Tooltip>
-        </Flex>
-        <Flex gap={6} wrap style={{ marginTop: 12 }}>
-          {PRESETS.map((p) => <Button key={p} size="small" shape="round" onClick={() => run(p)}>{p}</Button>)}
-        </Flex>
-
-        <div style={{ marginTop: 18 }}>
-          {state.status === "loading" && (
-            <Flex vertical align="center" gap={12} style={{ padding: 48 }}>
-              <Spin size="large" />
-              <Typography.Text type="secondary">Gathering trends for “{state.query}” from 9 sources…</Typography.Text>
-            </Flex>
-          )}
-          {state.status === "error" && <Alert type="error" showIcon title="Something went wrong" description={state.message} />}
-          {state.status === "topic" && (
-            <TopicView data={state.data} alerts={alerts} activeTerm={activeTerm} setActiveTerm={setActiveTerm} />
-          )}
-          {state.status === "compare" && <CompareView a={state.a} b={state.b} />}
-        </div>
+        {state.status === "loading" && (
+          <Flex vertical align="center" gap={12} style={{ padding: 64 }}>
+            <Spin size="large" />
+            <Typography.Text type="secondary">
+              {state.query ? `Gathering trends for “${state.query}”…` : "Gathering what's trending worldwide…"}
+            </Typography.Text>
+          </Flex>
+        )}
+        {state.status === "error" && <Alert type="error" showIcon title="Something went wrong" description={state.message} />}
+        {state.status === "topic" && (
+          <TopicView data={state.data} alerts={alerts} activeTerm={activeTerm} setActiveTerm={setActiveTerm} onFilter={run} />
+        )}
+        {state.status === "compare" && <CompareView a={state.a} b={state.b} />}
       </div>
     </Layout>
   );
