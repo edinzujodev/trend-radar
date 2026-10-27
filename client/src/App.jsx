@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { App as AntApp, Alert, Button, Flex, Input, Layout, Select, Spin, Switch, Tooltip, Typography } from "antd";
-import { SearchOutlined } from "@ant-design/icons";
+import { App as AntApp, Alert, Button, Flex, Input, Layout, Menu, Select, Spin, Switch, Tooltip, Typography, theme } from "antd";
+import { RiseOutlined, SearchOutlined } from "@ant-design/icons";
 import { ALERT_TOP, COUNTRIES, PRESETS, REFRESH_MS, allTerms, fetchTrends, splitCompare, topTerms } from "./lib.js";
 import TopicView from "./components/TopicView.jsx";
 import CompareView from "./components/CompareView.jsx";
@@ -10,6 +10,7 @@ const params = new URLSearchParams(location.search);
 
 export default function App() {
   const { notification } = AntApp.useApp();
+  const { token } = theme.useToken();
   const [q, setQ] = useState(params.get("q") || "");
   const [geo, setGeo] = useState(params.get("geo") || "US");
   const [auto, setAuto] = useState(false);
@@ -77,15 +78,18 @@ export default function App() {
   }, [auto, search]);
 
   const run = (query = q) => { setQ(query); search(query, geo); };
+  const goHome = () => { setQ(""); setState({ status: "idle" }); history.replaceState(null, "", location.pathname); };
 
   return (
     <Layout style={{ minHeight: "100vh" }}>
+      <Layout.Header style={{ paddingInline: 16, background: token.colorBgContainer, borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
+        <div style={{ maxWidth: 1168, margin: "0 auto" }}>
+          <Menu mode="horizontal" selectedKeys={[]} onClick={goHome}
+            style={{ fontSize: 16, fontWeight: 600, borderBottom: 0, background: "transparent" }}
+            items={[{ key: "home", icon: <RiseOutlined style={{ fontSize: 18 }} />, label: "Trend Radar" }]} />
+        </div>
+      </Layout.Header>
       <div className="wrap">
-        <Typography.Title level={2} style={{ marginBottom: 4 }}>Trend Radar</Typography.Title>
-        <Typography.Paragraph type="secondary">
-          Type a topic or group to see what's trending in it right now on news, Reddit, Hacker News, GitHub, Bluesky,
-          Mastodon, DEV, Google Trends and Wikipedia.
-        </Typography.Paragraph>
 
         <Flex gap={8} wrap align="center">
           <Input size="large" style={{ flex: "1 1 260px" }} value={q} allowClear

@@ -9,7 +9,7 @@
 }
 body { margin: 0; }
 
-.wrap { max-width: 1200px; margin: 0 auto; padding: 24px 16px 64px; }
+.wrap { width: 100%; max-width: 1200px; margin: 0 auto; padding: 24px 16px 64px; }
 
 .bar { height: 4px; border-radius: 2px; background: var(--bar-bg); overflow: hidden; display: flex; }
 .bar i { display: block; height: 100%; }
