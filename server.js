@@ -77,13 +77,15 @@ const daysAgo = (d) => new Date(Date.now() - d * 864e5);
 const ymd = (d) => d.toISOString().slice(0, 10).replace(/-/g, "");
 
 // ---------- sources ----------
-// Each returns [{ source, title, text, url, time, score, meta }]
+// Each returns [{ source, title, text, url, time, score, meta }]. An empty q means "worldwide":
+// each site's own front page / trending feed instead of a search.
 
 const sources = {
   async news(q, geo) {
     const lang = geo === "US" ? "en-US" : `en-${geo}`;
     const xml = await get(
-      `https://news.google.com/rss/search?q=${encodeURIComponent(q + " when:1d")}&hl=${lang}&gl=${geo}&ceid=${geo}:en`,
+      q ? `https://news.google.com/rss/search?q=${encodeURIComponent(q + " when:1d")}&hl=${lang}&gl=${geo}&ceid=${geo}:en`
+        : `https://news.google.com/rss?hl=${lang}&gl=${geo}&ceid=${geo}:en`,
       "text"
     );
     return blocks(xml, "item").slice(0, 60).map((it) => {
@@ -102,7 +104,8 @@ const sources = {
   },
 
   async reddit(q) {
-    const xml = await get(`https://www.reddit.com/search.rss?q=${encodeURIComponent(q)}&sort=top&t=day&limit=50`, "text");
+    const xml = await get(q ? `https://www.reddit.com/search.rss?q=${encodeURIComponent(q)}&sort=top&t=day&limit=50`
+      : "https://www.reddit.com/r/popular/top.rss?t=day&limit=50", "text");
     // Search also returns matching subreddits and users; only links to /comments/ are posts
     return blocks(xml, "entry").filter((e) => /<link href="[^"]*\/comments\//.test(e)).map((e) => {
       const link = (e.match(/<link href="([^"]+)"/) || [])[1] || "";
@@ -123,7 +126,8 @@ const sources = {
   async hackernews(q) {
     const since = Math.floor(daysAgo(2).getTime() / 1000);
     const data = await get(
-      `https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(q)}&tags=story&numericFilters=created_at_i>${since}&hitsPerPage=60`
+      q ? `https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(q)}&tags=story&numericFilters=created_at_i>${since}&hitsPerPage=60`
+        : "https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=60"
     );
     return data.hits.map((h) => ({
       source: "Hacker News",
@@ -139,7 +143,7 @@ const sources = {
   async github(q) {
     const since = daysAgo(7).toISOString().slice(0, 10);
     const data = await get(
-      `https://api.github.com/search/repositories?q=${encodeURIComponent(q)}+created:>${since}&sort=stars&order=desc&per_page=30`
+      `https://api.github.com/search/repositories?q=${q ? encodeURIComponent(q) + "+" : ""}created:>${since}&sort=stars&order=desc&per_page=30`
     );
     // New repos impersonating paid apps ("X for Windows, download") or game cheats/spoofers are
     // malware bait with bought stars
@@ -160,7 +164,10 @@ const sources = {
 
   async bluesky(q) {
     const since = daysAgo(2).toISOString();
-    const data = await get(
+    // Worldwide: Bluesky's own "What's Hot" feed, English posts only
+    const posts = q ? null : (await get("https://public.api.bsky.app/xrpc/app.bsky.feed.getFeed?feed=at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/whats-hot&limit=60"))
+      .feed.map((f) => f.post).filter((p) => !p.record?.langs || p.record.langs.some((l) => l.startsWith("en")));
+    const data = posts ? { posts } : await get(
       // English only: every country in the picker is English-speaking, and short topics like
       // "AI" otherwise match common words in other languages (Portuguese "aí")
       `https://api.bsky.app/xrpc/app.bsky.feed.searchPosts?q=${encodeURIComponent(q)}&sort=top&limit=60&since=${since}&lang=en`
@@ -183,7 +190,8 @@ const sources = {
   async mastodon(q) {
     const words = topicWords(q), hashtag = words.join("");
     const any = words.length > 1 ? words.map((w) => `&any[]=${w}`).join("") : "";
-    const data = await get(`https://mastodon.social/api/v1/timelines/tag/${hashtag}?limit=40${any}`);
+    const data = await get(q ? `https://mastodon.social/api/v1/timelines/tag/${hashtag}?limit=40${any}`
+      : "https://mastodon.social/api/v1/trends/statuses?limit=40");
     return data.filter((s) => !s.language || s.language.startsWith("en")).flatMap((s) => {
       const text = stripHtml(s.content);
       if (words.length > 1 && !s.tags.some((t) => t.name.toLowerCase() === hashtag) && !mentionsAll(text, words)) return [];
@@ -203,8 +211,9 @@ const sources = {
   async devto(q) {
     const words = topicWords(q), joined = words.join("");
     const tags = words.length > 1 ? [joined, ...words] : [joined];
-    const lists = await Promise.all(tags.map((t, i) =>
-      get(`https://dev.to/api/articles?tag=${t}&top=3&per_page=30`).catch((e) => { if (i === 0) throw e; return []; })));
+    const lists = q ? await Promise.all(tags.map((t, i) =>
+      get(`https://dev.to/api/articles?tag=${t}&top=3&per_page=30`).catch((e) => { if (i === 0) throw e; return []; })))
+      : [await get("https://dev.to/api/articles?top=1&per_page=30")];
     const seen = new Set();
     const data = lists.flatMap((list, i) => list.filter((a) =>
       !seen.has(a.id) && seen.add(a.id) &&
@@ -236,7 +245,8 @@ async function googleTrends(q, geo) {
       source: tag(n, "ht:news_item_source"),
     })),
   }));
-  const matches = all.filter((t) => {
+  // Worldwide, every top search counts as a match
+  const matches = !terms.length ? all : all.filter((t) => {
     const hay = (t.term + " " + t.news.map((n) => n.title).join(" ")).toLowerCase();
     return terms.some((w) => hay.includes(w));
   });
@@ -244,11 +254,21 @@ async function googleTrends(q, geo) {
 }
 
 // Wikipedia: find articles about the topic and flag the ones with a recent spike in views
+// For a topic: related articles, rising first. Worldwide: yesterday's most-read articles.
 async function wikipediaSpikes(q) {
-  const search = await get(
-    `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(q)}&srlimit=15&format=json&origin=*`
-  );
-  const titles = search.query.search.map((s) => s.title);
+  let titles;
+  if (q) {
+    const search = await get(
+      `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(q)}&srlimit=15&format=json&origin=*`
+    );
+    titles = search.query.search.map((s) => s.title);
+  } else {
+    const d = daysAgo(1);
+    const top = await get(`https://wikimedia.org/api/rest_v1/metrics/pageviews/top/en.wikipedia/all-access/${d.getUTCFullYear()}/${String(d.getUTCMonth() + 1).padStart(2, "0")}/${String(d.getUTCDate()).padStart(2, "0")}`);
+    titles = top.items[0].articles.map((a) => a.article.replace(/_/g, " "))
+      .filter((t) => t !== "Main Page" && !/^(Special|Wikipedia|Portal|File|Help|Category|Talk|User):/.test(t))
+      .slice(0, 15);
+  }
   const end = ymd(daysAgo(1));
   const start = ymd(daysAgo(15));
   const rows = await Promise.all(
@@ -274,7 +294,23 @@ async function wikipediaSpikes(q) {
       }
     })
   );
-  return rows.filter(Boolean).sort((a, b) => b.change - a.change);
+  return rows.filter(Boolean).sort((a, b) => (q ? b.change - a.change : b.views - a.views));
+}
+
+// What the platforms themselves list as trending (worldwide view only)
+async function platformTrends() {
+  const [bsky, masto] = await Promise.allSettled([
+    get("https://public.api.bsky.app/xrpc/app.bsky.unspecced.getTrendingTopics?limit=15"),
+    get("https://mastodon.social/api/v1/trends/tags?limit=15"),
+  ]);
+  return {
+    bluesky: bsky.status === "fulfilled"
+      ? bsky.value.topics.map((t) => ({ name: t.displayName || t.topic, description: t.description || "", url: `https://bsky.app${t.link}` }))
+      : [],
+    mastodon: masto.status === "fulfilled"
+      ? masto.value.map((t) => ({ name: "#" + t.name, uses: (t.history || []).slice(0, 2).reduce((n, h) => n + +h.uses, 0), url: t.url }))
+      : [],
+  };
 }
 
 // ---------- spam filtering ----------
@@ -514,7 +550,7 @@ async function trends(q, geo) {
   items = withTrend(items, terms);
   const changes = withHistory(key, terms);
 
-  const [gt, wiki] = await Promise.allSettled([googleTrends(q, geo), wikipediaSpikes(q)]);
+  const [gt, wiki, plat] = await Promise.allSettled([googleTrends(q, geo), wikipediaSpikes(q), q ? null : platformTrends()]);
   const data = {
     query: q,
     geo,
@@ -524,6 +560,7 @@ async function trends(q, geo) {
     changes,
     googleTrends: gt.status === "fulfilled" ? gt.value : { matches: [], top: [], error: String(gt.reason) },
     wikipedia: wiki.status === "fulfilled" ? wiki.value : [],
+    platforms: plat.status === "fulfilled" ? plat.value : null,
     items,
   };
   cache.set(key, { at: Date.now(), data });
@@ -536,10 +573,6 @@ const server = http
     if (url.pathname === "/api/trends") {
       const q = (url.searchParams.get("q") || "").trim().slice(0, 80);
       const geo = (url.searchParams.get("geo") || "US").toUpperCase().replace(/[^A-Z]/g, "").slice(0, 2) || "US";
-      if (!q) {
-        res.writeHead(400, { "Content-Type": "application/json" });
-        return res.end(JSON.stringify({ error: "Missing ?q=" }));
-      }
       try {
         const data = await trends(q, geo);
         res.writeHead(200, { "Content-Type": "application/json" });
